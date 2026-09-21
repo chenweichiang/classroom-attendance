@@ -176,7 +176,7 @@ docs/OPERATIONS.zh-TW.md   the teacher's handbook (Chinese)
 
 ## License
 
-Code is released under the [MIT License](LICENSE).
+Code is released under the [MIT License](LICENSE). Third-party notices are in [`NOTICE`](NOTICE).
 
 `static/fonts/ZhuqueFangsong-subset.woff2` is a subset of [Zhuque Fangsong](https://github.com/TrionesType/zhuque), © 2023 JadeFoci, distributed under the SIL Open Font License 1.1; the license text is in [`static/fonts/OFL.txt`](static/fonts/OFL.txt).
 
