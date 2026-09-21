@@ -1,0 +1,23 @@
+{% extends "base.html" %}{% block title %}課堂點名｜我的出缺勤{% endblock %}
+{% block head %}<style>.c{margin:18px 0 28px}.c .nm{font:400 1.5rem/1.2 var(--display)}.c .id{font:.95rem var(--mono);color:var(--muted)}.sum{display:flex;gap:6px;flex-wrap:wrap;margin:8px 0 10px}.rate{font:500 1.6rem/1 var(--mono);margin:6px 0 10px}</style>{% endblock %}
+{% block body %}
+<div class="mast"><span class="k"><b>課堂點名</b> · {{ BASE_HOST }}</span><nav><a href="/help">說明</a></nav></div>
+<h1>我的出缺勤</h1>
+<p class="muted sm">用你簽到時綁定的那支手機開這一頁，才看得到紀錄；換了手機或清過瀏覽器資料就會顯示找不到。</p>
+<div id="out"><p class="muted">讀取中</p></div>
+<script>
+const L={present:'出席',late:'遲到',absent:'缺席',excused:'請假',pending:'待確認'};
+const esc=x=>String(x??'').replace(/[&<>"']/g,ch=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[ch]));
+(async()=>{
+  const fd=new FormData();const o=document.getElementById('out');let j;
+  try{const r=await fetch('/api/me',{method:'POST',body:fd});j=await r.json()}catch(e){o.innerHTML='<p class="err">連線失敗，<a href="">重新整理</a></p>';return}
+  if(!j.courses){o.innerHTML='<p class="err">'+esc(j.error||'讀取失敗')+'</p>';return}
+  if(!j.courses.length){o.innerHTML='<p>這支手機還沒有綁定任何學號。第一次簽到之後再來看。</p>';return}
+  o.innerHTML=j.courses.map(c=>`<div class="c"><div class="nm">${esc(c.course)}</div><div class="id">${esc(c.name)}　${esc(c.student_id)}</div>
+    <div class="rate">${c.rate==null?'—':Math.round(c.rate*100)+'%'} <span class="k">出席率</span></div>
+    <div class="sum">${['present','late','absent','excused','pending'].map(k=>`<span class="tag s-${k}">${L[k]} ${c.counts[k]}</span>`).join('')}</div>
+    ${c.items.length?`<table><tr><th>日期</th><th>狀態</th><th>簽到時間</th></tr>${c.items.map(i=>`<tr><td class="mono">${esc(i.date)}</td><td><span class="tag s-${esc(i.status)}">${esc(i.label)}</span></td><td class="mono">${esc(i.ts)}</td></tr>`).join('')}</table>`:'<p class="muted sm">這門課還沒有點過名。</p>'}
+  </div>`).join('');
+})();
+</script>
+{% endblock %}
