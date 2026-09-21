@@ -178,7 +178,7 @@ docs/OPERATIONS.zh-TW.md   老師的操作手冊
 
 ## 授權
 
-程式碼以 [MIT License](LICENSE) 釋出。
+程式碼以 [MIT License](LICENSE) 釋出，第三方素材的聲明在 [`NOTICE`](NOTICE)。
 
 `static/fonts/ZhuqueFangsong-subset.woff2` 是[朱雀仿宋](https://github.com/TrionesType/zhuque)的子集，© 2023 JadeFoci，以 SIL Open Font License 1.1 授權散布，授權全文在 [`static/fonts/OFL.txt`](static/fonts/OFL.txt)。
 
