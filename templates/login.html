@@ -1,0 +1,14 @@
+{% extends "base.html" %}{% block title %}課堂點名｜登入{% endblock %}
+{% block body %}
+<div class="mast"><span class="k"><b>課堂點名</b> · {{ BASE_HOST }}</span></div>
+<div style="max-width:380px;margin:8vh auto 0">
+<h1>老師登入</h1>
+<form method="post" action="/t/login">
+<input type="hidden" name="next" value="{{ next }}">
+<label>密碼</label><input type="password" name="password" autofocus autocomplete="current-password">
+{% if error %}<p class="err">{{ error }}</p>{% endif %}
+<p style="margin-top:28px"><button class="big" type="submit">登入</button></p>
+</form>
+<p class="muted sm">登入一次記三十天。學生不用登入，掃投影幕的 QR 就能簽到。</p>
+</div>
+{% endblock %}

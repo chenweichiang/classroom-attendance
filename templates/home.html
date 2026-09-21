@@ -1,0 +1,113 @@
+{% extends "base.html" %}{% block title %}課堂點名｜主頁{% endblock %}
+{% block head %}<style>
+.course{display:grid;grid-template-columns:1fr auto;gap:16px 24px;padding:18px 0;border-bottom:1px solid var(--rule)}
+.course:last-child{border-bottom:0}
+.course .nm{font:400 1.5rem/1.2 var(--display)}
+.course .live{color:var(--red)}
+.course .acts{display:flex;flex-direction:column;gap:10px;min-width:190px}
+@media (max-width:640px){.course{grid-template-columns:1fr}.course .acts{flex-direction:row;flex-wrap:wrap}}
+.steps{counter-reset:s;padding:0;margin:0;list-style:none}
+.steps li{counter-increment:s;position:relative;padding:10px 0 10px 3em;border-bottom:1px solid var(--rule-soft)}
+.steps li:last-child{border-bottom:0}
+.steps li::before{content:counter(s,decimal-leading-zero);position:absolute;left:0;top:12px;font:13px/1.6 var(--mono);color:var(--red);letter-spacing:.06em}
+.faq td:first-child{width:34%;font-weight:600}
+.toc{display:flex;gap:6px 18px;flex-wrap:wrap;font:13px/1.4 var(--mono);letter-spacing:.06em;margin:-6px 0 8px}
+.toc a{text-decoration:none;color:var(--muted)}
+.toc a:hover{color:var(--red)}
+dl{margin:0}dt{font-weight:600;margin-top:10px}dd{margin:0 0 4px}
+</style>{% endblock %}
+{% block body %}
+<div class="mast"><span class="k"><b>課堂點名</b> · {{ BASE_HOST }}</span><nav><a href="#flow">上課流程</a><a href="#student">學生怎麼用</a><a href="#faq">遇到狀況</a><a href="#rules">規則</a><a href="/help" target="_blank">學生說明頁</a><a href="/t/logout">登出</a></nav></div>
+
+<h1>點名簿</h1>
+<p class="muted">按「開始點名」進入該課的點名頁，投影頁從點名頁開；正在點名的課會標成紅色。</p>
+
+<div class="sheet">
+{% for c in courses %}
+<div class="course">
+<div>
+<div class="nm{{ ' live' if c.live }}">{{ c.row.name }}</div>
+<div class="k" style="margin:4px 0 8px">{{ c.row.code }} · {{ c.n }} 人 · 開放 {{ c.settings.open_minutes }} 分 · 遲到上限 {{ c.settings.late_minutes }} 分 · QR {{ c.settings.qr_interval }} 秒 · 抽 {{ c.settings.spot_n }} 人 · 首次綁定{{ '開放' if c.settings.allow_bind else '<span style="color:var(--red)">已關</span>'|safe }}{% if c.settings.discord_channel %} · Discord 通知{% endif %}{% if c.live %} · <span style="color:var(--red)">點名中，{{ c.live.opened_at|fmt }} 開始</span>{% endif %}</div>
+{% if c.recent %}
+<table style="max-width:420px"><tr><th>最近</th><th>出席＋遲到</th><th></th></tr>
+{% for s in c.recent %}<tr><td class="mono">{{ s.opened_at|fmt(true) }}{% if s.kind=='bind' %} <span class="tag flag">綁定場次</span>{% endif %}{% if s.voided_at %} <span class="tag flag">已作廢</span>{% endif %}</td><td class="mono">{{ s.n_ok }} / {{ c.n }}</td>
+<td><a href="/t/session/{{ s.id }}">{{ '進行中' if not s.closed_at else '紀錄' }}</a></td></tr>{% endfor %}
+</table>
+{% else %}<p class="muted sm" style="margin:0">還沒點過名。</p>{% endif %}
+</div>
+<div class="acts">
+{% if c.live %}
+<a class="btn" href="/t/session/{{ c.live.id }}">回到點名頁</a>
+<a class="btn ghost" href="/t/projector/{{ c.live.id }}" target="_blank">開投影頁</a>
+{% else %}
+<form method="post" action="/t/course/{{ c.row.id }}/open" style="margin:0">
+<button type="submit" name="kind" value="normal" style="width:100%">開始點名</button>
+<button type="submit" name="kind" value="bind" class="ghost" style="width:100%;margin-top:6px">只做綁定（第一次上課用）</button>
+</form>
+{% endif %}
+<a class="btn ghost" href="/t/course/{{ c.row.id }}/students">名冊與設定</a>
+<a class="btn ghost" href="/t/course/{{ c.row.id }}/report">學期報表</a>
+</div>
+</div>
+{% else %}
+<p>還沒有課程，先在伺服器用 <code>manage.py import-roster</code> 匯入名冊。</p>
+{% endfor %}
+</div>
+
+<h2 id="flow">上課流程<small>約四分鐘，手上只要一支手機</small></h2>
+<ol class="steps">
+<li>每門課第一次上課按「只做綁定（第一次上課用）」，讓全班用手機掃 QR 完成裝置與 PIN 綁定；這一場不計出缺勤，之後每週才按「開始點名」。</li>
+<li>筆電接上投影機，在筆電開這一頁，該課按「開始點名」，進點名頁後按「開投影頁」，把投影分頁切成全螢幕（Mac 按 <kbd>⌃⌘F</kbd>，Windows 按 <kbd>F11</kbd>）。投影頁只有 QR、六位數、已簽到人數與倒數，不會出現任何姓名。</li>
+<li>手機也開這一頁，按「回到點名頁」看名單，名單每三秒更新一次。學生掃投影幕上的 QR 簽到。</li>
+<li>出席窗（預設三分鐘，各課可調）到了會自動關；還有人在排隊就趁出席窗內按「延長出席窗」。關窗之後到遲到上限前仍可簽，記為遲到；這時按延長只會延長遲到窗，晚到的人不會變成出席。</li>
+<li>按「抽點」，手機會用大字顯示幾個學號與姓名（人數可調），叫名看人，按「在」或「不在」。「在」會順便把待確認的人升成出席；「不在」直接改缺席，用同一支手機簽的另一位也一起改缺席。抽點與待確認的裁定要在按「結束」之前做完，結束後就不能抽了。</li>
+<li>名單上方切到「待確認」，同一支手機簽了兩個學號時兩人都會在裡面；當場問清楚，放行按「出席」，不放行按「缺席」。被放行的那位這次沒有綁到手機，下次要簽時記得臨時打開首次綁定。</li>
+<li>按「結束點名」，沒簽的自動記缺席，名單發到 Discord；請假的在該列改「請假」。誤開或誤按結束，都用「刪除此次」整筆撤掉再重開（已發到 Discord 的名單撤不回）。</li>
+</ol>
+<p class="muted sm">首次綁定時把規則說清楚：PIN 不給人，換手機找老師，抽點不在算缺席並記代簽嫌疑，代簽的人那一次同樣缺席。綁定場次也可以抽點：叫到不在的人，綁定會被撤回，那個學號本場不能再綁（按錯的話，那位學生下次上課再綁）；結束點名時，綁定場次不寫自動缺席、也不發 Discord。</p>
+
+<h2 id="student">學生怎麼用<small>可把 <a href="/help" target="_blank">學生說明頁</a> 貼到 Discord</small></h2>
+<dl>
+<dt>第一次</dt><dd>掃投影幕的 QR，填學號、中文全名，自己設一組四到六位數的 PIN 並輸兩次，送出之後這支手機就綁定該學號。</dd>
+<dt>之後每次</dt><dd>掃 QR 就會看到自己的名字，輸 PIN 即完成，畫面出現紅色的「到」章才算成功。</dd>
+<dt>相機掃不到</dt><dd>到 <a href="/c" target="_blank">{{ BASE_HOST }}/c</a> 輸投影幕上的六位數，數字會定時更換，換了以後半分鐘內舊的還能用，不用搶。</dd>
+<dt>畫面說 QR 已過期</dt><dd>重新掃一次即可，這是刻意設計，讓截圖傳出去的人來不及用。</dd>
+</dl>
+
+<h2 id="faq">遇到狀況<small>每一列都寫了去哪一頁按什麼</small></h2>
+<div class="tablewrap"><table class="faq">
+<tr><th>狀況</th><th>怎麼做</th></tr>
+<tr><td>手機沒電或沒帶</td><td>點名頁最下面「手動簽到」輸學號，選出席或遲到。</td></tr>
+<tr><td>第一週綁完之後</td><td>在點名頁或「名冊與設定」把「首次綁定」關掉，之後沒人能用別人的學號綁走手機。新同學或換手機的人要簽時按一下臨時打開，簽完再關。</td></tr>
+<tr><td>換手機</td><td>「名冊與設定」頁找到該生按「解除綁定」，請他用新手機重新掃 QR，PIN 照舊。</td></tr>
+<tr><td>忘記 PIN</td><td>名冊頁該生按「重設」，綁定與 PIN 一起清掉，請他重新掃 QR 當作第一次使用。</td></tr>
+<tr><td>學生看到「這個學號已綁定另一支手機」</td><td>他真的換了手機，或者先前有人用別支手機簽過他的學號。到名冊頁看該學號的綁定時間，問清楚再「解除綁定」。</td></tr>
+<tr><td>名單標「裝置已綁他人」或「同裝置多人」</td><td>同一支手機簽了兩個學號，多半是代簽，狀態會停在「待確認」。當場叫兩人確認，到名冊頁看哪兩個學號綁在同一時間，把不該綁的那個「解除綁定」，該次改缺席。</td></tr>
+<tr><td>名單標「疑似同手機」</td><td>兩個人在 90 秒內從同一個網路出口、同一種手機型號各自做了第一次綁定。同型號手機在校園 Wi-Fi 上會長得一樣，所以只是提示，不改狀態；當場看一眼那兩位是不是各拿一支手機就好。</td></tr>
+<tr><td>名單標「IP 與教室不同」</td><td>只是提示，表示那支手機的網路出口與投影筆電不同，例如用 4G。人在教室就不必理會，也可以在課程設定關掉 IP 比對。</td></tr>
+<tr><td>名單標「PIN 鎖定」</td><td>該生的手機這一場被鎖住，走「手動簽到」；真的忘了就到名冊頁「重設」。</td></tr>
+<tr><td>名單標「老師改後才掃碼」</td><td>你先把他記成請假或缺席，他之後才掃到碼。要不要改回出席由你決定。</td></tr>
+<tr><td>名單標「同來源多筆首綁」</td><td>同一個網路出口與瀏覽器兩分鐘內第三筆以上首次綁定，像一台機器在替人綁，先停在待確認，當場確認。</td></tr>
+<tr><td>剛加選，不在名冊</td><td>先在紙上記；課後更新名冊後，回那次點名頁用「手動簽到」補登，報表會顯示補登的狀態。加選前沒補登的場次顯示「—」不計分母。</td></tr>
+<tr><td>忘了按結束點名</td><td>遲到窗過了系統會自動結案並記缺席，Discord 也會發，但發送時間是你下一次打開老師頁的時候，可能隔幾小時。</td></tr>
+<tr><td>抽點判「不在」之後</td><td>他改缺席；如果他是用別人的手機簽的，同一支手機簽的另一位也一起改缺席並標「代簽連坐」。</td></tr>
+<tr><td>不小心開了點名</td><td>點名頁按「刪除此次」，整筆消失。</td></tr>
+<tr><td>出席窗過了還有人沒簽</td><td>點名頁按「延長 2 分鐘」，可以按好幾次。</td></tr>
+<tr><td>投影頁顯示點名已結束</td><td>出席窗與遲到窗都過了，或已經按過結束。要再開就回這一頁重新「開始點名」。</td></tr>
+<tr><td>學生說送出後轉圈或失敗</td><td>請他重新掃 QR 再送一次，掃碼後有三分鐘填表時限。還是不行就手動簽到，課後把他畫面上的錯誤訊息記下來給我。</td></tr>
+<tr><td>投影頁 QR 不動、人數不更新</td><td>投影頁要登入才看得到，重新整理一次，跳到登入頁就輸密碼。網路整個斷掉就改口頭點名。</td></tr>
+<tr><td>同一個學生修你兩門課</td><td>兩門課各綁一次手機、各設一組 PIN（可設一樣），第二門課第一次簽會看到首次表單，是正常的。</td></tr>
+<tr><td>學生問自己缺了幾次</td><td>請他用綁定的手機開 {{ BASE_HOST }}/me，整學期紀錄都在，不必問你。</td></tr>
+<tr><td>結束點名後 Discord 沒收到名單</td><td>「名冊與設定」的 Discord 頻道 ID 是否有填；點名頁結束後有「發到 Discord」按鈕可以重發。</td></tr>
+<tr><td>學期末登校務系統</td><td>先把每一場的「待確認」都裁定完（沒裁定的不算出席但算分母），再到「學期報表」右上角「下載 CSV」，出席率是出席加遲到除以總次數減請假。</td></tr>
+<tr><td>老師手機弄丟或想讓別台登出</td><td>任何一台按「登出」，所有裝置的登入都會失效，重新輸密碼即可。學期中不要更換伺服器上的 ATTEND_SECRET。</td></tr>
+</table></div>
+
+<h2 id="rules">規則與設定</h2>
+<dl>
+<dt>狀態</dt><dd>出席是在開放窗內完成，遲到是關窗後到遲到上限前完成，待確認是有裝置異常等老師裁定，缺席是沒簽、抽點不在或老師判定，請假由老師手動設定。</dd>
+<dt>設定</dt><dd>每門課各自一組，在「名冊與設定」頁最上面調：開放分鐘、遲到上限、QR 秒數、過期容許秒數、抽點人數、IP 比對。</dd>
+<dt>更新名冊</dt><dd>整理成 CSV（欄位 student_id、name、class）後在伺服器跑 <code>manage.py import-roster</code>，重複執行安全，不會動到 PIN 與綁定，指令在專案的 OPERATIONS.md。</dd>
+<dt>資料</dt><dd>只存學號、姓名、簽到時間、裝置識別雜湊與連線 IP，學期結束匯出後刪庫。</dd>
+</dl>
+{% endblock %}

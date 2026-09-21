@@ -1,0 +1,193 @@
+{% extends "base.html" %}{% block title %}{{ c.name }}｜簽到{% endblock %}
+{% block head %}<style>
+.receipt{text-align:center;padding:24px 0 8px}
+.receipt .nm{font:400 2.4rem/1.2 var(--display);margin:10px 0 2px}
+.stamp.wait{border-color:var(--amber);color:var(--amber)}
+.stamp.off{border-style:dashed;border-color:var(--muted);color:var(--muted);transform:none}
+.receipt .id{font:1.1rem/1.4 var(--mono);letter-spacing:.06em}
+.receipt .meta{color:var(--muted);margin-top:6px}
+#countdown{font:12px/1.4 var(--mono);color:var(--muted);letter-spacing:.06em}
+.who{font:400 1.6rem/1.3 var(--display);margin:.3em 0}
+.pinbox{-webkit-text-security:disc;letter-spacing:.2em}
+#form{padding-bottom:60vh}
+#err{scroll-margin-top:12px}
+</style>{% endblock %}
+{% block body %}
+<div class="mast"><span class="k"><b>{{ c.name }}</b> · 簽到</span><nav><a href="/help">說明</a></nav></div>
+<div style="max-width:420px;margin:0 auto">
+{% if closed %}
+<h1>點名已結束</h1>
+<p>有到課但沒簽到成功的，直接找老師。</p>
+{% elif expired %}
+<h1>QR 已過期</h1>
+<p class="err">{{ error }}</p>
+<p><a class="btn ghost" href="/c">改輸六位數</a></p>
+<p class="muted sm">手機掃不過，不要借同學的手機，直接舉手找老師。</p>
+{% else %}
+<div id="form">
+<h1 id="hd">簽到</h1>
+<p id="modeHint" class="muted sm"></p>
+<div id="firstFields">
+<label>學號</label><input id="student_id" autocapitalize="characters" autocomplete="off" inputmode="text" class="mono" maxlength="12">
+<div id="nameField"><label>姓名，中文全名</label><input id="name" autocomplete="off"></div>
+<label>PIN，四到六位數字<br>換手機時要用它證明是你，請記住，別告訴別人</label><input id="pin1" type="text" inputmode="numeric" pattern="[0-9]*" maxlength="6" autocomplete="off" class="mono pinbox">
+<div id="pin2Field"><label>再輸一次 PIN</label><input id="pin2" type="text" inputmode="numeric" pattern="[0-9]*" maxlength="6" autocomplete="off" class="mono pinbox"></div>
+</div>
+<div id="returnFields" style="display:none">
+<div class="who" id="who"></div><a href="#" onclick="switchFirst();return false" class="muted sm">不是我</a>
+</div>
+<span id="errHome"></span>
+<p class="err" id="err" role="alert"></p>
+<p style="margin-top:28px"><button class="big" type="button" id="go" onclick="submit()">簽到</button></p>
+<p id="countdown"></p>
+<p class="muted sm">手機掃不過，不要借同學的手機，直接舉手找老師。</p>
+<p class="muted" style="font-size:.78rem">只記錄學號、姓名、簽到時間與連線來源，供本課程出缺勤使用，學期結束後刪除。</p>
+</div>
+<div id="receipt" class="receipt" style="display:none">
+<div class="stamp" id="rstamp">到</div>
+<div class="nm" id="rname"></div>
+<div class="id" id="rseat"></div>
+<div class="meta"><span id="rstatus"></span> · <span id="rts" class="mono"></span></div>
+<p class="muted sm" id="rnote"></p>
+<p class="sm"><a href="/me">看我的出缺勤</a></p>
+</div>
+{% endif %}
+</div>
+<script>
+{% if not closed and not expired %}
+const GRANT="{{ grant }}", COURSE={{ c.id }}, GRANT_SECONDS={{ grant_seconds }};
+const DK='';  // 裝置識別由伺服器以 httponly cookie 下發，前端不再自報
+let mode='first', knownId='', pinOnly=false;
+const sidEl=document.getElementById('student_id'), nameEl=document.getElementById('name');
+const pin1El=document.getElementById('pin1'), pin2El=document.getElementById('pin2');
+const nameField=document.getElementById('nameField'), pin2Field=document.getElementById('pin2Field');
+const errEl=document.getElementById('err'), errHome=document.getElementById('errHome');
+const goBtn=document.getElementById('go'), cdEl=document.getElementById('countdown');
+
+// B019：學號欄先把全形英數轉半形再過濾，不要靜默刪掉打不進去的字
+function toHalfwidth(s){return s.replace(/[！-～]/g,c=>String.fromCharCode(c.charCodeAt(0)-0xFEE0)).replace(/　/g,' ')}
+sidEl.addEventListener('input',()=>{sidEl.value=toHalfwidth(sidEl.value).toUpperCase().replace(/[^0-9A-Z]/g,'');saveDraft()});
+[pin1El,pin2El].forEach(el=>el.addEventListener('input',()=>{el.value=el.value.replace(/\D/g,'')}));
+nameEl.addEventListener('input',saveDraft);
+
+// B017：學號與姓名隨輸入存進 sessionStorage，換頁（410／切 App 再回來）不用重打
+function saveDraft(){try{sessionStorage.setItem('attend_sid',sidEl.value);sessionStorage.setItem('attend_name',nameEl.value)}catch(e){}}
+function restoreDraft(){try{
+  const sid=sessionStorage.getItem('attend_sid'), nm=sessionStorage.getItem('attend_name');
+  if(sid && !sidEl.value)sidEl.value=sid;
+  if(nm && !nameEl.value)nameEl.value=nm;
+}catch(e){}}
+
+function switchFirst(){
+  mode='first';pinOnly=false;
+  document.getElementById('firstFields').style.display='';nameField.style.display='';pin2Field.style.display='';
+  document.getElementById('returnFields').style.display='none';
+  document.getElementById('modeHint').textContent='第一次用這支手機簽到，填學號、姓名並設 PIN，之後這支手機就綁定你的學號。';
+  restoreDraft();
+}
+// B016：伺服器判定「這個學號已經設過 PIN」時，表單切成只輸 PIN（保留學號，隱藏姓名與第二個 PIN 欄）
+function pinOnlyMode(){
+  pinOnly=true;
+  nameField.style.display='none';pin2Field.style.display='none';
+  document.getElementById('modeHint').textContent='這個學號已經設過 PIN，請直接輸入原本的 PIN。';
+  pin1El.focus();
+}
+
+async function init(){
+  const fd=new FormData();fd.append('course_id',COURSE);
+  try{const r=await fetch('/api/whoami',{method:'POST',body:fd});const j=await r.json();
+    if(j.known){mode='return';knownId=j.student_id;document.getElementById('who').textContent=j.name+'　'+j.student_id;
+      document.getElementById('firstFields').style.display='none';document.getElementById('returnFields').style.display='';document.getElementById('modeHint').textContent='';return}
+  }catch(e){}
+  switchFirst();
+}
+init();
+
+let left=GRANT_SECONDS,expired=false;
+function expireForm(){
+  expired=true;
+  cdEl.textContent='時間到';
+  goBtn.textContent='重新掃 QR 或改輸六位數';
+  goBtn.disabled=false;
+  goBtn.onclick=()=>{location.href='/c'};
+}
+setInterval(()=>{left--;if(expired)return;if(left>0){cdEl.textContent='請在 '+left+' 秒內送出'}else{expireForm()}},1000);
+
+// B014：AbortSignal.timeout 是新式 API，舊瀏覽器（iOS 15 Safari／Samsung Internet ≤19／舊 WebView）沒有；
+// 先偵測，沒有就退回 AbortController＋setTimeout，不要直接呼叫讓整個 fetch 連發都發不出去
+function fetchWithTimeout(url, opts, ms){
+  if(typeof AbortSignal!=='undefined' && typeof AbortSignal.timeout==='function'){
+    return fetch(url, Object.assign({}, opts, {signal: AbortSignal.timeout(ms)}));
+  }
+  const ctrl=new AbortController();
+  const timer=setTimeout(()=>ctrl.abort(), ms);
+  return fetch(url, Object.assign({}, opts, {signal: ctrl.signal})).finally(()=>clearTimeout(timer));
+}
+
+// B003：欄位級錯誤——移動共用的 #err 到該欄位正下方，捲入視野，焦點移過去
+function showFieldError(el, msg){
+  errEl.textContent=msg;
+  // 放在欄位「上方」：瀏覽器會把聚焦的輸入框頂到鍵盤上緣，下方那一行正好落在鍵盤後面
+  el.insertAdjacentElement('beforebegin', errEl);
+  el.focus({preventScroll:true});
+  errEl.scrollIntoView({block:'start'});
+}
+function showServerError(msg){
+  errHome.insertAdjacentElement('afterend', errEl);
+  errEl.textContent=msg;
+  errEl.scrollIntoView({block:'start'});
+}
+function validateForm(){
+  if(mode==='first'){
+    if(!sidEl.value.trim()){showFieldError(sidEl,'請輸入學號');return false}
+    if(!pinOnly && !nameEl.value.trim()){showFieldError(nameEl,'請輸入姓名');return false}
+    if(!/^[0-9]{4,6}$/.test(pin1El.value)){showFieldError(pin1El,'PIN 要 4 到 6 位數字');return false}
+    if(!pinOnly && pin1El.value!==pin2El.value){showFieldError(pin2El,'兩次 PIN 不一樣');return false}
+  }
+  // A2：回簽模式（mode==='return'）這支手機已認得，不再要求輸 PIN，直接放行送出
+  return true;
+}
+
+async function submit(){
+  errEl.textContent='';
+  if(!validateForm())return;
+  goBtn.disabled=true;
+  const fd=new FormData();fd.append('grant',GRANT);
+  const h=[];for(const f of [()=>screen.width,()=>screen.height,()=>devicePixelRatio,()=>navigator.hardwareConcurrency||'',()=>navigator.platform||'',()=>Intl.DateTimeFormat().resolvedOptions().timeZone||'']){try{h.push(f())}catch(e){h.push('')}}fd.append('hints',h.join('|'));
+  if(mode==='first'){
+    fd.append('student_id',sidEl.value);
+    fd.append('name',pinOnly?'':nameEl.value);
+    fd.append('pin',pin1El.value);
+    // pinOnly 之後不再帶 pin2：伺服器只要看到 pin2 就會一律回「已經設過 PIN」，帶著它送第二次以後
+    // 反而看不到「剩 N 次」與鎖定訊息（B016：這句訊息只該在最初那次「以為是首次」時出現一次）
+    fd.append('pin2',pinOnly?'':pin2El.value);
+  }else{fd.append('student_id',knownId)}  // A2：回簽免 PIN，pin 欄位留空由後端 Form("") 接住
+  try{
+    const r=await fetchWithTimeout('/api/checkin',{method:'POST',body:fd},10000);
+    const j=await r.json().catch(()=>({ok:false,error:'伺服器忙線（HTTP '+r.status+'），請稍後再試'}));
+    goBtn.disabled=false;
+    if(!j.ok){
+      showServerError(j.error||'失敗');
+      if(mode==='first' && (j.error||'').indexOf('已經設過 PIN')>=0)pinOnlyMode();
+      return;
+    }
+    try{sessionStorage.removeItem('attend_sid');sessionStorage.removeItem('attend_name')}catch(e){}
+    document.getElementById('form').style.display='none';document.getElementById('receipt').style.display='';
+    const st=document.getElementById('rstamp');st.className='stamp';
+    // B030：綁定場次不算出缺勤，章面字用「綁」不用「到」，待確認仍優先顯示「候」
+    if(j.status==='待確認'){st.textContent='候';st.classList.add('wait')}else if(j.kind==='bind'&&(j.status==='出席'||j.status==='遲到')){st.textContent='綁'}else if(j.status==='出席'||j.status==='遲到'){st.textContent='到'}else{st.textContent=j.status[0];st.classList.add('off')}
+    document.getElementById('rname').textContent=j.name;document.getElementById('rstatus').textContent=j.status;document.getElementById('rts').textContent=j.ts;document.getElementById('rseat').textContent=j.student_id;
+    let note='';
+    if(j.status==='待確認') note='系統看到這支手機簽過別的學號，老師會當場確認，確認前不算出席。';
+    else if(j.kind==='bind') note='這支手機已綁定你的學號。下次上課掃碼後按一下就完成簽到。';
+    else if(j.again) note=(j.status==='出席'||j.status==='遲到')?'這次已經簽過，這是原本的紀錄。':'老師已把你這次記為「'+j.status+'」，有疑問下課找老師。';
+    else if(j.first_time) note='這支手機已綁定你的學號，記住你的 PIN。';
+    document.getElementById('rnote').textContent=note;
+  }catch(e){
+    goBtn.disabled=false;
+    showServerError(e instanceof TypeError ? '這個瀏覽器太舊，請改用 Chrome 或 Safari 開啟，或改輸六位數' : '送不出去，檢查網路後再試一次');
+  }
+}
+{% endif %}
+</script>
+{% endblock %}

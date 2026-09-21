@@ -1,0 +1,6 @@
+{% extends "base.html" %}{% block title %}課堂點名｜{{ status }}{% endblock %}
+{% block body %}
+<div class="mast"><span class="k"><b>課堂點名</b> · {{ BASE_HOST }}</span><nav><a href="/t">主頁</a><a href="/help">說明</a></nav></div>
+<h1>{{ status }}</h1>
+<p>{{ detail }}</p>
+{% endblock %}

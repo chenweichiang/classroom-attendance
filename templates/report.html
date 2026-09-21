@@ -1,0 +1,13 @@
+{% extends "base.html" %}{% block title %}{{ c.name }}｜報表{% endblock %}
+{% block head %}<style>th.d{writing-mode:vertical-rl;text-orientation:mixed;padding:6px 4px;white-space:nowrap}td.c{text-align:center;padding:6px 4px}.rate{font-family:var(--mono)}</style>{% endblock %}
+{% block body %}
+<div class="mast"><span class="k"><a href="/t" style="text-decoration:none"><b>課堂點名</b></a> · {{ c.name }}</span><nav><a href="/t/course/{{ c.id }}/export/csv">下載 CSV</a><a href="/t/course/{{ c.id }}/students">名冊</a><a href="/t">主頁</a></nav></div>
+<h1>學期報表</h1>
+<p class="muted sm">只計已結束的點名，共 {{ sessions|length }} 次，不含綁定場次與已作廢場次；遲到窗過了沒按結束的場次會自動結案；「—」是該生加選前的場次，不計。出席率是出席加遲到，除以總次數減請假；「待確認」沒裁定就不算出席，記得在點名頁把待確認的人改掉。</p>
+<div class="tablewrap"><table><tr><th>學號</th><th>姓名</th>{% for s in sessions %}<th class="d mono">{{ s.opened_at|fmt(true) }}</th>{% endfor %}<th>出席</th><th>遲到</th><th>缺席</th><th>請假</th><th>待確認</th><th>出席率</th></tr>
+{% for r in rows %}<tr><td class="mono">{{ r.stu.student_id }}</td><td>{{ r.stu.name }}</td>
+{% for x in r.cells %}<td class="c">{% if x == 'na' %}<span class="muted">—</span>{% else %}<span class="tag s-{{ x }}">{{ STATUS_LABEL[x][0] }}</span>{% endif %}</td>{% endfor %}
+<td class="mono">{{ r.counts.present }}</td><td class="mono">{{ r.counts.late }}</td><td class="mono">{{ r.counts.absent }}</td><td class="mono">{{ r.counts.excused }}</td><td class="mono">{{ r.counts.pending }}</td>
+<td class="rate">{{ pct(r.rate) }}</td></tr>{% endfor %}
+</table></div>
+{% endblock %}

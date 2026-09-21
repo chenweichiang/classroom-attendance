@@ -1,0 +1,121 @@
+{% extends "base.html" %}{% block title %}{{ c.name }}｜點名{% endblock %}
+{% block head %}
+<style>
+body{background:#fff;padding:0;height:100vh;overflow:hidden}
+.wrap{max-width:none;height:100vh;display:grid;grid-template-rows:auto 1fr auto;padding:14px 28px}
+.top{display:flex;justify-content:space-between;align-items:baseline;gap:24px;border-bottom:2px solid var(--ink);padding-bottom:6px}
+.top .n{white-space:nowrap;flex:none}
+#netmsg{position:fixed;inset:0;display:none;align-items:center;justify-content:center;font:400 clamp(28px,5vh,60px)/1.3 var(--display);background:rgba(255,255,255,.92);text-align:center;padding:5vw}
+.top .t{font:400 clamp(18px,2.6vh,30px)/1.2 var(--display)}
+.top .n{font:clamp(18px,2.8vh,32px)/1 var(--mono);letter-spacing:.04em}
+.mid{display:grid;grid-template-columns:auto auto;justify-content:center;gap:clamp(12px,3vw,48px);align-items:center;min-height:0}
+/* B033：QR 邊長吃滿短邊的九成（保證 ≥85% 短邊，不管長寬比），六位數欄位寬度另外用 vw 上限夾住，
+   碼本身允許換行（不再 nowrap）——否則窄螢幕（如 1024×768）並排會把 QR 擠小，這是實測 1024×768 才會踩到的坑 */
+#qr{width:min(90vmin,calc(100vh - 100px));aspect-ratio:1}
+/* 上限再用中間那一列的實際高度夾住：768 高的投影機上 90vmin 會比中間列高 10px，QR 底部被下方資訊列壓到 */
+.mid{container-type:size}
+@supports (width:1cqh){
+  #qr{width:min(90vmin,100cqh)}
+}
+#qr svg{width:100%;height:100%;display:block}
+.side{text-align:center;width:clamp(120px,20vw,300px)}
+.side .k{margin-bottom:6px}
+#code{font:500 clamp(48px,min(9vh,12vw),110px)/1.05 var(--mono);letter-spacing:.1em;color:var(--red);white-space:normal;word-spacing:.2em}
+#remain{font:clamp(14px,2vh,22px)/1 var(--mono);color:var(--muted);margin-top:6px}
+.side .url{font:clamp(12px,1.6vh,18px)/1.4 var(--mono);color:var(--muted);margin-top:18px;overflow-wrap:break-word}
+.bot{display:flex;justify-content:space-between;align-items:baseline;border-top:1px solid var(--rule);padding-top:6px;font:clamp(13px,1.9vh,20px)/1.4 var(--body);color:var(--muted)}
+.closed .mid,.closed .bot .k{visibility:hidden}
+.big-msg{position:fixed;inset:0;display:none;flex-direction:column;gap:24px;align-items:center;justify-content:center;font:400 clamp(48px,9vh,110px)/1 var(--display);background:var(--paper);z-index:5}
+.big-msg small{font:clamp(16px,2.4vh,24px)/1.4 var(--body);color:var(--muted)}
+.closed .big-msg{display:flex}
+/* B025：畫面卡在過期那格的遮罩，只用既有紅/紙/墨色，不加新色 */
+#stalemsg{position:fixed;inset:0;display:none;flex-direction:column;gap:20px;align-items:center;justify-content:center;font:400 clamp(28px,5.5vh,64px)/1.4 var(--display);background:var(--paper);text-align:center;padding:6vw;z-index:6}
+#stalemsg .k{color:var(--red)}
+.stale #stalemsg{display:flex}
+.stale .mid,.stale .bot{visibility:hidden}
+/* B035：token 失效不導頁，全螢幕文字提示 */
+#authmsg{position:fixed;inset:0;display:none;flex-direction:column;gap:20px;align-items:center;justify-content:center;font:400 clamp(28px,5.5vh,64px)/1.4 var(--display);background:var(--paper);text-align:center;padding:6vw;z-index:7}
+.authexpired #authmsg{display:flex}
+.authexpired .mid,.authexpired .bot,.authexpired .top{visibility:hidden}
+#bindLabel{color:var(--red);font:400 clamp(14px,1.8vh,22px)/1.3 var(--body)}
+</style>
+{% endblock %}
+{% block body %}
+<div class="top"><span class="t">{{ c.name }}<br><span id="bindLabel" style="display:none">綁定場次：今天只綁手機，不計出缺勤</span></span><span class="n" id="count">— / —</span></div>
+<div class="mid">
+<div id="qr"></div>
+<div class="side"><div class="k">掃不到就輸六位數</div><div id="code">······</div><div id="remain"></div><div class="url">{{ BASE_HOST }}/c</div></div>
+</div>
+<div class="bot"><span id="phase"></span><span class="k" id="every">QR 會定時更換</span></div>
+<div class="big-msg" id="msg">點名已結束<small>還沒簽到的同學請直接找老師</small></div>
+<div id="netmsg">連線中斷，投影幕上的 QR 可能已失效<br><small style="font:1rem var(--body)">請重新整理這一頁</small></div>
+<div id="stalemsg"><span class="k">畫面沒有更新，請老師點一下這個分頁或重新整理</span></div>
+<div id="authmsg"><span class="k">登入已失效，請老師在這台電腦重新登入</span></div>
+<script>
+const sid={{ s.id }};let lastCode='',fails=0,staleAt=0,inFlight=false,pollTimer=null;
+fetch('/api/t/session/'+sid+'/teacher-ip',{method:'POST'}).catch(()=>{});
+
+// B014：AbortSignal.timeout 是 2022 年後才普及的 API，沒有時退回 AbortController，別讓整支請求悄悄不發
+function timeoutSignal(ms){
+  if(typeof AbortSignal!=='undefined'&&typeof AbortSignal.timeout==='function')return AbortSignal.timeout(ms);
+  const ac=new AbortController();setTimeout(()=>ac.abort(),ms);return ac.signal;
+}
+
+
+// B025：Wake Lock 失敗要默默放棄，不能因此擋畫面
+let wakeLock=null;
+async function requestWakeLock(){
+  try{
+    if('wakeLock' in navigator)wakeLock=await navigator.wakeLock.request('screen');
+  }catch(e){/* 不支援或被拒絕都無妨，僅螢幕可能自動休眠 */}
+}
+requestWakeLock();
+
+async function tick(){
+  if(inFlight)return;
+  inFlight=true;
+  try{
+    const r=await fetch('/api/t/session/'+sid+'/qr?have='+encodeURIComponent(lastCode),{cache:'no-store',signal:timeoutSignal(4000)});
+    if(r.status===401){document.body.classList.add('authexpired');inFlight=false;return}
+    if(r.status===404){document.getElementById('msg').innerHTML='這次點名已被刪除';document.body.classList.add('closed');inFlight=false;return}
+    const d=await r.json();fails=0;document.getElementById('netmsg').style.display='none';
+    document.body.classList.remove('stale');
+    staleAt=performance.now()+Math.max(0,d.remain)*1000+d.interval*1000;
+    document.getElementById('count').textContent=d.n_ok+' / '+d.total;
+    document.getElementById('bindLabel').style.display=d.kind==='bind'?'':'none';
+    document.getElementById('every').textContent='QR 每 '+d.interval+' 秒換一次';
+    document.getElementById('remain').textContent=Math.max(0,Math.ceil(d.remain))+' 秒後換';
+    document.getElementById('code').textContent=d.code.slice(0,3)+' '+d.code.slice(3);
+    if(d.svg&&d.code!==lastCode){document.getElementById('qr').innerHTML=d.svg;lastCode=d.code}
+    const left=Math.max(0,Math.ceil((d.open_until-d.now)/60)), lateLeft=Math.max(0,Math.ceil((d.late_until-d.now)/60));
+    // C-T8：綁定場次沒有遲到區，狀態列改標「綁定中，剩 N 分鐘」
+    document.getElementById('phase').textContent= d.kind==='bind'&&d.phase!=='closed'?('綁定中，剩 '+left+' 分鐘')
+      : d.phase==='open'?('簽到中，出席窗剩 '+left+' 分鐘'): d.phase==='late'?('已進入遲到區，剩 '+lateLeft+' 分鐘'):'點名已結束';
+    document.body.classList.toggle('closed', d.phase==='closed');
+    if(d.phase==='closed')staleAt=0;
+  }catch(e){if(++fails>=3)document.getElementById('netmsg').style.display='flex'}
+  inFlight=false;
+}
+
+// B025：本地時鐘自我檢查，不管輪詢本身是否被節流，只要這段程式碼有機會執行就會發現卡格
+function checkStale(){
+  if(staleAt&&performance.now()>staleAt&&!document.body.classList.contains('closed')){
+    document.body.classList.add('stale');
+  }
+}
+
+function scheduleNext(){
+  pollTimer=setTimeout(async()=>{await tick();checkStale();scheduleNext()},1000);
+}
+
+document.addEventListener('visibilitychange',function(){
+  if(!document.hidden){
+    checkStale();
+    tick();
+    requestWakeLock();
+  }
+});
+
+(async()=>{await tick();checkStale();scheduleNext();})();
+</script>
+{% endblock %}

@@ -1,0 +1,35 @@
+# 課堂點名系統 Classroom attendance
+# 秘密值放同一層的 .env（見 .env.example）。Secrets live in .env next to this file.
+#
+# 只綁 127.0.0.1：前面一定要有終結 TLS 的反向代理（Caddy、nginx…）。
+# Bound to loopback on purpose: put a TLS-terminating reverse proxy in front.
+#
+# 單一 worker 是硬限制：限流計數存在行程記憶體裡，多 worker 會失效。
+# Single worker is a hard requirement: rate limits are kept in process memory.
+services:
+  attend:
+    build: .
+    image: attend:latest
+    container_name: attend
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:3009:8000"
+    env_file:
+      - .env
+    environment:
+      - ATTEND_DB=/data/attend.db
+    volumes:
+      - ./data:/data          # chown 10001:10001 ./data
+    user: "10001:10001"
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    read_only: true
+    tmpfs:
+      - /tmp:size=32m,mode=1777,noexec,nosuid
+    logging:
+      driver: json-file
+      options: {max-size: "10m", max-file: "3"}
+    mem_limit: 256m
+    memswap_limit: 256m

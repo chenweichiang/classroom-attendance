@@ -1,0 +1,62 @@
+# attend 的開發工具設定（不是套件；執行期相依仍是 requirements.txt）。
+# 工具選型依據與每一層在抓什麼＝tests/README.md；一鍵＝tests/gate.sh。
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = ["test_*.py"]
+timeout = 120
+addopts = "-p no:cacheprovider"
+markers = [
+    "rehearsal: 教室彩排（真實時鐘、真瀏覽器，慢；tests/gate.sh --full 才跑）",
+]
+
+[tool.coverage.run]
+branch = true
+source = ["app"]
+dynamic_context = "test_function"   # coverage html --show-contexts 可逐行看是哪個測試踩到
+
+[tool.coverage.report]
+fail_under = 97
+show_missing = true
+
+# 只開「會是 bug」的規則；app.py 刻意寫得很密（一行多句、分號），排版類規則全部不開。
+[tool.ruff]
+target-version = "py312"
+line-length = 200
+extend-exclude = ["mutants", ".venv"]
+
+[tool.ruff.lint]
+select = ["F", "B", "S", "ASYNC", "PLE", "PLW", "E9", "DTZ", "BLE", "RUF006", "RUF012", "RUF015", "TRY002"]
+ignore = [
+    "S101",   # assert：測試裡本來就用
+    "S608",   # SQL 字串拼接：全檔皆參數化，僅欄名白名單拼接，逐處人工審過
+    "S311",   # random：抽點不是密碼學用途；token 用的是 secrets
+    "B008",   # FastAPI 的 Form(...)／PathParam(...) 預設值是框架慣例
+]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/*" = ["S", "PLW", "BLE", "B", "DTZ"]
+
+[tool.pyright]
+include = ["app.py", "manage.py"]
+pythonVersion = "3.12"
+venvPath = "."
+venv = ".venv"
+reportMissingModuleSource = false
+
+# mutmut 3.x：把 app.py 複製到 mutants/ 逐一改壞再跑測試；活下來的突變＝測試沒在驗的行為。
+# 鍵名以 3.8.0 套件說明原文為準（2.x 的 paths_to_mutate／runner 已不存在）。
+[tool.mutmut]
+source_paths = ["app.py"]
+pytest_add_cli_args_test_selection = ["tests/test_unit.py", "tests/test_api.py", "tests/test_state_machine.py", "tests/test_friction.py", "tests/test_teacher_friction.py"]
+pytest_add_cli_args = ["-p", "no:randomly", "-p", "no:cacheprovider", "-x", "-q"]
+also_copy = ["templates/", "static/", "manage.py", "tests/", "pyproject.toml"]
+mutate_only_covered_lines = true
+
+[tool.vulture]
+paths = ["app.py", "manage.py"]
+min_confidence = 80
+
+[tool.djlint]
+profile = "jinja"
+ignore = "H006,H013,H021,H023,H030,H031,T003,J018"   # 行內 style、img 尺寸、meta 描述：此站刻意如此

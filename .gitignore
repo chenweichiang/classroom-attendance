@@ -1,0 +1,16 @@
+data/
+__pycache__/
+*.db
+*.db-*
+.venv/
+.env
+tests/fixtures/
+# 測試與分析工具的產物（2026-09-21）
+.coverage
+.coverage.*
+htmlcov/
+.pytest_cache/
+.ruff_cache/
+.hypothesis/
+.schemathesis/
+mutants/

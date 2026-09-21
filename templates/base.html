@@ -1,0 +1,102 @@
+<!doctype html>
+<html lang="zh-Hant-TW">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>{% block title %}課堂點名{% endblock %}</title>
+<script>
+(function(){
+  // B004/B026：前端錯誤回報，用 sendBeacon 打不到就默默放棄；不得因為回報本身再拋錯或擋住頁面。
+  function report(kind,msg){
+    try{
+      if(!navigator.sendBeacon)return;
+      var fd=new FormData();
+      fd.append('kind',kind);
+      fd.append('msg',String(msg||'').slice(0,200));
+      var m=location.pathname.match(/\/(?:t\/session|t\/projector|s)\/(\d+)/);
+      if(m)fd.append('sid',m[1]);
+      navigator.sendBeacon('/api/beacon',fd);
+    }catch(e){/* 回報失敗不能再噴錯 */}
+  }
+  window.addEventListener('error',function(e){report('jserror',(e&&e.message)||'error')});
+  window.addEventListener('unhandledrejection',function(e){report('jserror',(e&&e.reason&&e.reason.message)||String((e&&e.reason)||'rejection'))});
+})();
+</script>
+<style>
+@font-face{font-family:"Zhuque";src:url(/static/fonts/ZhuqueFangsong-subset.woff2?v={{ FONT_V }}) format("woff2");font-display:swap}
+:root{
+  --paper:#FBF8F1;--ink:#1B1A17;--rule:#D9D3C5;--rule-soft:#EAE5D9;--muted:#6E685C;--red:#C3272B;--amber:#9A6200;--green:#2F6B3A;
+  --display:"Zhuque","Noto Serif TC","Songti TC",serif;
+  --body:-apple-system,"PingFang TC","Noto Sans TC","Microsoft JhengHei",sans-serif;
+  --mono:"SF Mono",Menlo,Consolas,"Noto Sans Mono",monospace;
+  --pad:clamp(16px,4vw,32px)
+}
+*{box-sizing:border-box}
+html{font-synthesis:none;text-autospace:normal;text-spacing-trim:space-all}
+body{margin:0;background:var(--paper);color:var(--ink);font:16px/1.75 var(--body);padding:0 var(--pad) 48px}
+a{color:var(--ink);text-decoration:underline;text-decoration-color:var(--rule);text-underline-offset:3px}
+a:hover{text-decoration-color:var(--red)}
+.wrap{max-width:920px;margin:0 auto}
+/* 報頭 */
+.mast{display:flex;justify-content:space-between;align-items:baseline;gap:16px;padding:18px 0 12px;border-bottom:2px solid var(--ink);margin-bottom:22px;flex-wrap:wrap}
+.mast .k{font:12px/1 var(--mono);letter-spacing:.14em;color:var(--muted);text-transform:uppercase}
+.mast .k b{color:var(--ink);font-weight:500}
+.mast nav{display:flex;gap:18px;font-size:.9rem;flex-wrap:wrap}
+.mast nav a{text-decoration:none;border-bottom:1px solid transparent}
+.mast nav a:hover{border-bottom-color:var(--red)}
+h1{font:400 clamp(1.7rem,4vw,2.4rem)/1.25 var(--display);margin:.2em 0 .5em;letter-spacing:.02em}
+h2{font:400 1.35rem/1.3 var(--display);margin:2em 0 .7em;padding-bottom:.35em;border-bottom:1px solid var(--rule);display:flex;align-items:baseline;gap:12px;flex-wrap:wrap}
+h2 small{font:12px/1 var(--mono);color:var(--muted);letter-spacing:.06em}
+.k{font:12px/1.4 var(--mono);color:var(--muted);letter-spacing:.06em}
+.muted{color:var(--muted)}
+.sm{font-size:.88rem}
+/* 區塊：只有邊框，無陰影 */
+.sheet{border:2px solid var(--ink);padding:18px 20px;margin:12px 0;background:transparent}
+.sheet.thin{border-width:1px;border-color:var(--rule)}
+/* 按鈕：可點擊才有硬陰影 */
+button,.btn{font:inherit;font-size:.95rem;padding:9px 16px;border:2px solid var(--ink);background:var(--ink);color:var(--paper);cursor:pointer;text-decoration:none;display:inline-block;line-height:1.3;box-shadow:3px 3px 0 var(--red);transition:transform .08s,box-shadow .08s}
+button:hover,.btn:hover{transform:translate(-1px,-1px);box-shadow:4px 4px 0 var(--red)}
+button:active,.btn:active{transform:translate(2px,2px);box-shadow:1px 1px 0 var(--red)}
+button.ghost,.btn.ghost{background:transparent;color:var(--ink);box-shadow:3px 3px 0 var(--ink)}
+button.ghost:hover,.btn.ghost:hover{box-shadow:4px 4px 0 var(--ink)}
+button.ghost:active,.btn.ghost:active{box-shadow:1px 1px 0 var(--ink)}
+button.danger{background:var(--red);border-color:var(--red);box-shadow:3px 3px 0 var(--ink)}
+button.big{font-size:1.2rem;padding:14px 22px;width:100%}
+button.mini,.btn.mini{padding:3px 10px;font-size:.8rem;box-shadow:2px 2px 0 var(--ink);border-width:1px}
+button:disabled{opacity:.4;cursor:default;transform:none;box-shadow:none}
+/* 表單 */
+label{display:block;font:12px/1.4 var(--mono);color:var(--muted);letter-spacing:.06em;margin:16px 0 6px}
+input,select{font:inherit;padding:10px 12px;border:0;border-bottom:2px solid var(--ink);border-radius:0;width:100%;background:transparent;color:var(--ink)}
+input:focus,select:focus{outline:2px solid var(--red);outline-offset:2px;border-bottom-color:var(--red)}
+input[type=checkbox]{width:auto;accent-color:var(--red)}
+::placeholder{color:#8A8272}
+kbd{font:.85em var(--mono);border:1px solid var(--rule);padding:0 6px}
+code{font:.9em var(--mono)}
+/* 點名簿表格：只有橫線 */
+table{border-collapse:collapse;width:100%;font-size:.93rem}
+th{font:12px/1.4 var(--mono);color:var(--muted);letter-spacing:.06em;text-align:left;padding:8px 8px 6px;border-bottom:2px solid var(--ink);font-weight:500}
+td{padding:8px;border-bottom:1px solid var(--rule);vertical-align:top}
+tr:last-child td{border-bottom:0}
+.mono{font-family:var(--mono);font-size:.92em;letter-spacing:.02em}
+.tablewrap{overflow-x:auto}
+/* 狀態記號 */
+.tag{display:inline-block;font:12px/1 var(--mono);letter-spacing:.06em;padding:4px 7px;border:1px solid var(--ink);margin:1px 3px 1px 0;white-space:nowrap}
+.s-present{border-color:var(--ink)}
+.s-late{border-color:var(--amber);color:var(--amber)}
+.s-pending{background:var(--red);border-color:var(--red);color:#fff}
+.s-absent{border-color:var(--muted);color:var(--muted)}
+.s-excused{border-style:dashed}
+.flag{border-color:var(--red);color:var(--red)}
+.err{color:var(--red);font-weight:600}
+.row{display:flex;gap:10px;flex-wrap:wrap;align-items:center}
+/* 印章 */
+.stamp{display:inline-flex;align-items:center;justify-content:center;width:84px;height:84px;border:3px solid var(--red);border-radius:50%;color:var(--red);font:400 40px/1 var(--display);transform:rotate(-8deg);mix-blend-mode:multiply;opacity:.9;letter-spacing:0}
+.stamp.sm{width:52px;height:52px;font-size:24px;border-width:2px}
+@media (prefers-reduced-motion:reduce){button,.btn{transition:none}}
+</style>
+{% block head %}{% endblock %}
+</head>
+<body><div class="wrap">
+{% block body %}{% endblock %}
+</div></body>
+</html>

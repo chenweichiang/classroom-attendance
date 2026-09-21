@@ -1,0 +1,19 @@
+# 測試與除錯工具鏈（2026-09-21 重整；版本由 uv 解析，鎖定值見 tests/requirements-dev.lock）
+httpx==0.28.1
+pytest
+pytest-cov
+pytest-randomly
+pytest-timeout
+pytest-repeat
+pytest-xdist
+pytest-playwright
+hypothesis
+schemathesis
+playwright
+locust
+time-machine
+mutmut
+ruff
+pyright
+vulture
+djlint

@@ -1,0 +1,191 @@
+{% extends "base.html" %}{% block title %}{{ c.name }}｜點名中{% endblock %}
+{% block head %}<style>
+.status{display:flex;justify-content:space-between;align-items:baseline;gap:12px;flex-wrap:wrap}
+.status .ph{font:400 1.6rem/1.2 var(--display)}
+.counts{display:flex;gap:6px;flex-wrap:wrap;margin:10px 0 14px}
+#spot .pick{display:flex;gap:16px;align-items:center;flex-wrap:wrap;padding:12px 0;border-bottom:1px solid var(--rule)}
+#spot .pick:last-child{border-bottom:0}
+#spot .sid{font:500 1.9rem/1 var(--mono);color:var(--red);letter-spacing:.04em}
+#spot .nm{font:400 1.7rem/1 var(--display)}
+tr.st-pending td{background:#F6E9E6}
+tr.st-none td{color:var(--muted)}
+select.mini{width:auto;padding:8px 0;min-height:44px;font-size:.9rem;border-bottom-width:1px}
+.filter{display:flex;gap:10px;flex-wrap:wrap;align-items:flex-end;margin-bottom:6px}
+.filter input,.filter select{width:auto;min-width:160px;padding:6px 4px;font-size:.92rem}
+@media (max-width:600px){td.hide-sm,th.hide-sm{display:none}td,th{padding:6px 4px}}
+</style>{% endblock %}
+{% block body %}
+<div class="mast"><span class="k"><a href="/t" style="text-decoration:none"><b>課堂點名</b></a> · {{ c.name }}</span><nav><a href="/t/projector/{{ s.id }}" target="_blank">開投影頁</a><a href="/t/course/{{ c.id }}/students">名冊</a><a href="/t">主頁</a></nav></div>
+
+<div class="status"><span class="ph" id="phase"></span><span class="tag flag" id="kindTag" style="display:none">綁定場次</span><span class="tag flag" id="voidedTag" style="display:none">已作廢</span><span class="k" id="timer"></span></div>
+<div class="counts" id="counts" aria-live="polite"></div>
+<div class="row">
+<button type="button" onclick="spot()" id="spotBtn">抽點 {{ st.spot_n }} 人</button>
+<button type="button" class="ghost" onclick="extend()" id="extendBtn">延長 2 分鐘</button>
+<button type="button" class="danger" onclick="closeSession()" id="closeBtn">結束點名</button>
+<button type="button" class="ghost mini" onclick="delSession()" title="誤開或測試用，整筆刪除，報表不計">刪除此次</button>
+</div>
+<div class="row" style="margin-top:10px">
+<button type="button" class="ghost mini" id="bindBtn" onclick="toggleBind()"></button>
+<button type="button" class="ghost mini" id="notifyBtn" onclick="notify()" style="display:none">發到 Discord</button>
+<button type="button" class="ghost mini" id="maskBtn" onclick="toggleMask()"></button>
+<button type="button" class="ghost mini" id="voidBtn" onclick="toggleVoid()" style="display:none"></button>
+</div>
+<div class="row" id="bulkRow" style="display:none;margin-top:10px;align-items:center">
+<span class="k" id="bulkLabel"></span>
+<select class="mini" id="bulkTo" aria-label="整批更正目標狀態"><option value="present">出席</option><option value="late">遲到</option><option value="excused">請假</option></select>
+<button type="button" class="ghost mini" onclick="bulkStatus()">整批更正</button>
+</div>
+<p class="err" id="heldMsg" role="status" style="display:none">這次出席不到一半，缺席名單沒有自動發到 Discord。先確認名單不是系統問題造成的，再按「發到 Discord」。</p>
+<p class="k" style="margin:10px 0 0">教室 IP <span id="tip" class="mono">（開投影頁後記錄）</span>　<button type="button" class="ghost mini" onclick="resetIp()" title="用現在這台裝置的網路出口當教室 IP（投影筆電按才對，手機 4G 別按）">以這台為教室 IP</button></p>
+<p class="muted sm" id="ipMutedHint" style="display:none;margin:4px 0 0">這場多數人不是走教室網路，「IP 與教室不同」沒有參考性，先不顯示。</p>
+<div class="row funnel" id="funnel" style="margin-top:8px"></div>
+<div id="stuck" style="display:none"></div>
+<p class="muted sm" style="margin:6px 0 0" id="phaseHint"></p>
+
+<div id="spot" style="display:none"><h2>抽點<small>叫學號與姓名，看人，按在或不在</small></h2>
+<div id="picks" aria-live="polite"></div></div>
+
+<h2>名單<small>每三秒更新<span id="pause" style="display:none;color:var(--red)">　操作中，暫停更新</span><span id="net" style="display:none;color:var(--red)">　連線不穩，重試中</span></small></h2>
+<div class="filter">
+<select id="filter" onchange="render()"><option value="">全部</option><option value="pending">待確認</option><option value="none">未簽到</option><option value="flag">有標記</option></select>
+<input id="q" placeholder="搜學號或姓名" oninput="render()">
+</div>
+<div class="tablewrap"><table><thead><tr><caption class="k" style="text-align:left;caption-side:top;padding:0 0 4px">名單，每列右邊的下拉可改狀態</caption><th>學號</th><th>姓名</th><th>狀態</th><th class="hide-sm">時間</th><th>標記</th><th>改</th></tr></thead><tbody id="rows"></tbody></table></div>
+
+<div id="manualSection">
+<h2>手動簽到<small>沒手機、忘 PIN、被鎖的人走這裡；輸完整學號、後 3 碼以上，或姓名片段，符合的人才會有出席／遲到鈕</small></h2>
+<div class="row"><input id="mid" placeholder="學號、學號後 3 碼、或姓名" class="mono" autocomplete="off" style="width:auto;min-width:220px"></div>
+<div id="mcands" aria-live="polite"></div>
+</div>
+
+<script>
+const sid={{ s.id }}, SL={{ STATUS_LABEL|tojson }}, FL={{ FLAG_LABEL|tojson }}, RL={{ REJECT_REASON_LABEL|tojson }};
+let state={rows:[],spots:[],funnel:null,stuck:[]};
+function maskOn(){try{return localStorage.getItem('attend_mask_names')==='1'}catch(e){return false}}
+function setMaskOn(v){try{localStorage.setItem('attend_mask_names',v?'1':'0')}catch(e){/* B034：儲存失敗就當沒開，不擋操作 */}}
+function maskName(n){n=String(n??'');return n?n[0]+'○○':n}
+function dispName(n){return maskOn()?maskName(n):n}
+function toggleMask(){setMaskOn(!maskOn());render()}
+async function post(url,data){const fd=new FormData();for(const k in data)fd.append(k,data[k]);let r;try{r=await fetch(url,{method:'POST',body:fd,signal:AbortSignal.timeout(10000)})}catch(e){alert('送不出去（網路問題），再按一次');return{ok:false}}if(r.status===401){location.href='/t/login?next='+location.pathname;return{ok:false}}const j=await r.json().catch(()=>({ok:false,error:'伺服器忙線（HTTP '+r.status+'），再按一次'}));if(!j.ok&&j.error)alert(j.error);return j}
+async function guard(btn,fn){if(btn.disabled)return;btn.disabled=true;try{await fn()}finally{if(state.phase!=='closed'||btn.id==='notifyBtn')btn.disabled=false}}
+function esc(x){return String(x??'').replace(/[&<>"']/g,ch=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[ch]))}
+let lastKey=0;document.addEventListener('input',e=>{if(e.target.id==='q'||e.target.id==='mid')lastKey=Date.now()});
+function busy(){const ae=document.activeElement;if(!ae)return false;if(ae.closest('#rows'))return true;return (ae.id==='q'||ae.id==='mid')&&Date.now()-lastKey<5000}
+let inflight=false;
+async function load(force){const pause=document.getElementById('pause');if(!force&&busy()){if(pause)pause.style.display='';return} if(pause)pause.style.display='none';if(inflight&&!force)return;inflight=true;try{ // 老師正在操作名單或打字時，輪詢不重繪
+  let r;try{r=await fetch('/api/t/session/'+sid+'/state',{cache:'no-store',signal:AbortSignal.timeout(8000)})}catch(e){document.getElementById('net').style.display='';return}
+  document.getElementById('net').style.display='none';if(r.status===401){location.href='/t/login?next='+location.pathname;return}if(r.status===404){alert('這次點名已被刪除');location.href='/t';return}state=await r.json();render()}finally{inflight=false}}
+function fmtMin(x){return Math.max(0,Math.ceil(x/60))}
+function render(){
+  const c=state.counts||{};
+  // C-T2：綁定場次不計出缺勤，counts 列只呈現「已綁定 N 人」，不show 出席/遲到等狀態統計
+  document.getElementById('counts').innerHTML=state.kind==='bind'
+    ?`<span class="tag s-present">已綁定 ${state.bound_n||0} 人</span>`
+    :['present','late','pending','absent','excused'].map(k=>`<span class="tag s-${k}">${SL[k]} ${c[k]||0}</span>`).join('')+`<span class="tag s-absent">未簽到 ${c.none||0}</span>`;
+  const ph=state.phase;
+  document.getElementById('phase').textContent=ph==='open'?'簽到中':ph==='late'?'遲到區':'已結束';
+  document.getElementById('timer').textContent=ph==='open'?('出席窗剩 '+fmtMin(state.open_until-state.now)+' 分'):ph==='late'?('遲到窗剩 '+fmtMin(state.late_until-state.now)+' 分'):'';
+  document.getElementById('tip').textContent=state.teacher_ip||'（開投影頁後記錄）';
+  document.getElementById('ipMutedHint').style.display=state.ip_check_muted?'':'none';  // C-S6
+  document.getElementById('closeBtn').disabled=(ph==='closed');document.getElementById('spotBtn').disabled=(ph==='closed');document.getElementById('extendBtn').disabled=(ph==='closed');
+  document.getElementById('extendBtn').textContent=ph==='late'?'延長遲到窗 2 分鐘':'延長出席窗 2 分鐘';
+  document.getElementById('phaseHint').textContent=ph==='open'?'出席窗內按延長：出席窗與遲到窗一起往後推。抽點與待確認裁定要在按「結束點名」之前做完。':ph==='late'?'已進遲到區：延長只延遲到窗，現在簽的人都是遲到，出席窗不會回來。抽點與待確認裁定要在結束前做完。':'已結束：狀態仍可用下拉修改；抽點與延長已停用。';
+  const bb=document.getElementById('bindBtn');
+  if(state.bind_forced){bb.textContent='首次綁定：本場一律開放';bb.disabled=true;bb.style.color='';}
+  else{bb.disabled=false;bb.textContent=state.allow_bind?'首次綁定：開放中（按一下關閉）':'首次綁定：已關閉（按一下開放）';bb.style.color=state.allow_bind?'':'var(--red)';}
+  const mb=document.getElementById('maskBtn'); mb.textContent=maskOn()?'遮姓名：開啟中（按一下關閉）':'遮姓名：已關閉（按一下開啟）'; mb.style.color=maskOn()?'var(--red)':'';
+  // C-T1：綁定場次與已作廢場次不計出缺勤，沒有名單可發，隱藏「發到 Discord」與暫緩提示
+  const notifyOk=state.kind==='normal'&&!state.voided;
+  document.getElementById('notifyBtn').style.display=(state.discord&&ph==='closed'&&notifyOk)?'':'none';
+  document.getElementById('heldMsg').style.display=(state.discord_held&&ph==='closed'&&notifyOk)?'':'none';
+  document.getElementById('kindTag').style.display=state.kind==='bind'?'':'none';
+  document.getElementById('voidedTag').style.display=state.voided?'':'none';
+  document.getElementById('spotBtn').style.display='';  // C-S2：B030「綁定場次不開放抽點」作廢，改為開放
+  const vb=document.getElementById('voidBtn');
+  if(ph==='closed'){vb.style.display='';vb.textContent=state.voided?'已作廢（按一下取消作廢）':'本場作廢（不計出缺勤，紀錄保留）';vb.style.color=state.voided?'var(--red)':'';}
+  else{vb.style.display='none'}
+  const brow=document.getElementById('bulkRow');
+  if(ph==='closed'&&state.auto_absent_n>0){brow.style.display='';document.getElementById('bulkLabel').textContent='自動缺席 '+state.auto_absent_n+' 筆：';}
+  else{brow.style.display='none'}
+  const f=document.getElementById('filter').value, q=document.getElementById('q').value.trim();
+  const rows=state.rows.filter(r=>{
+    if(f==='pending'&&r.status!=='pending')return false;
+    if(f==='none'&&r.status)return false;
+    if(f==='flag'&&!r.flags.length)return false;
+    if(q&&!(r.student_id.includes(q.toUpperCase())||r.name.includes(q)))return false;
+    return true});
+  document.getElementById('rows').innerHTML=rows.map(r=>`<tr class="st-${r.status||'none'}">
+   <td class="mono">${esc(r.student_id)}</td><td style="white-space:nowrap">${esc(dispName(r.name))}${r.bound?'':' <span class="k">未綁</span>'}</td>
+   <td>${r.status?`<span class="tag s-${r.status}">${SL[r.status]}</span>`:'—'}${r.locked?' <span class="tag flag">PIN 鎖定</span>':''}</td>
+   <td class="hide-sm mono">${r.ts||''}</td>
+   <td>${r.flags.filter(x=>x!=='late_bind'&&x!=='was_late').map(x=>`<span class="tag flag">${esc(FL[x]||x)}</span>`).join('')}${r.ip&&state.teacher_ip&&r.ip!==state.teacher_ip?`<span class="k"> ${esc(r.ip)}</span>`:''}</td>
+   <td>${state.kind==='bind'?'<span class="k">綁定場次不計出缺勤，要補登請另開一般點名</span>':`<select class="mini" aria-label="改 ${esc(r.name)} 的狀態" onchange="setStatus(${r.pk},this.value)"><option value="">改成</option>${['present','late','absent','excused'].filter(k=>k!==r.status).map(k=>`<option value="${k}">${SL[k]}</option>`).join('')}</select>`}</td></tr>`).join('');
+  document.getElementById('manualSection').style.display=state.kind==='bind'?'none':'';
+  if(state.spots.length){document.getElementById('spot').style.display='';
+    document.getElementById('picks').innerHTML=state.spots.map(p=>`<div class="pick"><span class="sid">${esc(p.student_id)}</span><span class="nm">${esc(p.name)}</span>
+     ${p.result?`<span class="tag ${p.result==='ok'?'s-present':'s-pending'}">${p.result==='ok'?'在':'不在'}</span>${p.result==='absent'&&state.kind==='bind'?'<span class="tag flag">不在場：已撤回這個學號的綁定，本場不能再綁；人其實在場的話，下次上課再綁</span>':''}`:`<span class="row"><button type="button" onclick="spotResult(${p.id},1)">在</button><button type="button" class="danger" onclick="spotResult(${p.id},0)">不在</button></span>`}</div>`).join('')}
+  renderFunnel();
+  renderMcands();
+}
+function renderFunnel(){
+  const fEl=document.getElementById('funnel'), sEl=document.getElementById('stuck');
+  const fn=state.funnel;
+  if(!fn){fEl.innerHTML='';sEl.style.display='none';return}
+  const t=fn.total;
+  const badLine=(t.land_expired+t.reject)>t.checkin_ok;
+  const reasonTxt=Object.entries(t.reject_by_reason||{}).sort((a,b)=>b[1]-a[1]).map(([k,v])=>`${RL[k]||k} ${v}`).join('、');
+  fEl.innerHTML=`<span class="k${badLine?' err':''}">掃到 ${t.land_ok}　過期 ${t.land_expired}　成功 ${t.checkin_ok}　被拒 ${t.reject}${reasonTxt?`（${reasonTxt}）`:''}${t.silent?`　落地未送出 ${t.silent}`:''}${t.client_errors?`　前端錯誤 ${t.client_errors}`:''}</span>`;
+  const stuck=state.stuck||[];
+  if(stuck.length){
+    sEl.style.display='';
+    sEl.innerHTML=`<p class="muted sm" style="margin:10px 0 4px">卡住需要幫忙：</p>`+stuck.map(x=>
+      `<span class="tag flag">${esc(x.student_id)} ${esc(dispName(x.name))}（${esc(x.reason_label)}）</span>`).join(' ');
+  }else{sEl.style.display='none';sEl.innerHTML=''}
+}
+async function setStatus(pk,status){if(!status)return;document.activeElement&&document.activeElement.blur();await post('/api/t/session/'+sid+'/status',{pk,status});load(true)}
+async function extend(){await guard(document.getElementById('extendBtn'),async()=>{await post('/api/t/session/'+sid+'/extend',{minutes:2});await load(true)})}
+async function spot(){await guard(document.getElementById('spotBtn'),async()=>{const j=await post('/api/t/session/'+sid+'/spotcheck',{});if(j.ok===false)return;if(j.note){alert(j.note);return}await load(true);document.getElementById('spot').scrollIntoView({behavior:'smooth'})})}
+async function spotResult(id,p){await post('/api/t/spotcheck/'+id,{present:p});load(true)}
+async function resetIp(){if(!confirm('把教室 IP 改成現在這台裝置的網路出口？請在投影筆電上按。'))return;const j=await post('/api/t/session/'+sid+'/teacher-ip',{force:'1'});if(j.ok)load(true)}
+async function toggleBind(){await post('/api/t/course/'+state.course_id+'/bind',{allow:state.allow_bind?'0':'1'});load(true)}
+async function notify(){await guard(document.getElementById('notifyBtn'),async()=>{const j=await post('/api/t/session/'+sid+'/notify',{});if(j.ok){alert('已發到 Discord');await load(true)}})}
+async function closeSession(){if(!confirm('結束點名？沒簽的會記缺席。'))return;await guard(document.getElementById('closeBtn'),async()=>{await post('/api/t/session/'+sid+'/close',{});await load(true)})}
+async function delSession(){if(!confirm('整筆刪除這次點名？所有簽到紀錄一起消失，報表不計。'+(state.phase==='closed'&&state.discord?'\n注意：Discord 上已發出的名單不會被撤回。':'')))return;await post('/api/t/session/'+sid+'/delete',{});location.href='/t'}
+async function toggleVoid(){
+  const next=state.voided?'0':'1';
+  const msg=state.voided?'取消作廢，這次點名重新計入出缺勤？':'本場作廢：不計入出缺勤，紀錄仍保留可查；已經發出的 Discord 名單不會被撤回。確定作廢？';
+  if(!confirm(msg))return;
+  const j=await post('/api/t/session/'+sid+'/void',{void:next});
+  if(j.ok)load(true);
+}
+async function bulkStatus(){
+  const to=document.getElementById('bulkTo').value;
+  if(!confirm('把 '+state.auto_absent_n+' 筆自動缺席整批改成「'+SL[to]+'」？'))return;
+  const j=await post('/api/t/session/'+sid+'/bulk-status',{to});
+  if(j.ok)load(true);
+}
+function mCandidates(){
+  const q=document.getElementById('mid').value.trim();
+  if(!q)return[];
+  const qUp=q.toUpperCase();
+  return state.rows.filter(r=>r.student_id===qUp||(qUp.length>=3&&r.student_id.endsWith(qUp))||r.name.includes(q)).slice(0,8);
+}
+async function mSet(pk,status){await post('/api/t/session/'+sid+'/status',{pk,status});document.getElementById('mid').value='';document.getElementById('mid').blur();load(true)}
+function renderMcands(){
+  const el=document.getElementById('mcands');
+  const cands=mCandidates();
+  el.innerHTML=cands.map(r=>`<div class="row" style="padding:4px 0">
+   <span class="mono">${esc(r.student_id)}</span><span>${esc(dispName(r.name))}</span>
+   <button type="button" onclick="mSet(${r.pk},'present')">出席</button>
+   <button type="button" class="ghost" onclick="mSet(${r.pk},'late')">遲到</button></div>`).join('');
+}
+document.getElementById('mid').addEventListener('input',renderMcands);
+document.getElementById('mid').addEventListener('keydown',e=>{
+  if(e.key!=='Enter')return;
+  const cands=mCandidates();
+  if(cands.length===1)mSet(cands[0].pk,'present');
+});
+load();setInterval(load,3000);
+</script>
+{% endblock %}

@@ -1,0 +1,43 @@
+{% extends "base.html" %}{% block title %}輸入點名碼{% endblock %}
+{% block head %}<style>
+.otp{display:flex;gap:8px;justify-content:space-between;margin:8px 0 4px}
+.otp input{width:100%;max-width:52px;aspect-ratio:1/1.25;text-align:center;font:500 1.9rem/1 var(--mono);padding:0;border:2px solid var(--ink);border-radius:0;background:#fff;caret-color:var(--red)}
+.otp input:focus{outline:none;border-color:var(--red);box-shadow:3px 3px 0 var(--red)}
+.otp input:nth-child(4){margin-left:10px}
+</style>{% endblock %}
+{% block body %}
+<div class="mast"><span class="k"><b>課堂點名</b> · {{ BASE_HOST }}</span><nav><a href="/help">說明</a></nav></div>
+<div style="max-width:380px;margin:6vh auto 0">
+<h1>輸投影幕上的六位數</h1>
+<form method="post" action="/c" id="f" autocomplete="off">
+<input type="hidden" name="code" id="code">
+<div class="otp" id="otp">
+<input inputmode="numeric" pattern="[0-9]*" maxlength="1" autocomplete="one-time-code" name="c1" aria-label="第 1 位" autofocus>
+<input inputmode="numeric" pattern="[0-9]*" maxlength="1" name="c2" aria-label="第 2 位">
+<input inputmode="numeric" pattern="[0-9]*" maxlength="1" name="c3" aria-label="第 3 位">
+<input inputmode="numeric" pattern="[0-9]*" maxlength="1" name="c4" aria-label="第 4 位">
+<input inputmode="numeric" pattern="[0-9]*" maxlength="1" name="c5" aria-label="第 5 位">
+<input inputmode="numeric" pattern="[0-9]*" maxlength="1" name="c6" aria-label="第 6 位">
+</div>
+{% if error %}<p class="err">{{ error }}</p>{% endif %}
+<p style="margin-top:24px"><button class="big" type="submit" id="go">下一步</button></p>
+</form>
+<p class="muted sm">數字會定時更換，換了以後半分鐘內舊的還能用，不用搶；六位填滿會自動送出。</p>
+<p class="muted sm">手機掃不過，不要借同學的手機，直接舉手找老師。</p>
+</div>
+<script>
+const cells=[...document.querySelectorAll('#otp input')],hidden=document.getElementById('code'),form=document.getElementById('f');
+let sent=false;
+function sync(){hidden.value=cells.map(c=>c.value).join('');if(hidden.value.length===6&&cells.every(c=>c.value)&&!sent){sent=true;form.submit()}}
+function fillFrom(i,str){const d=str.replace(/\D/g,'');for(let k=0;k<d.length&&i+k<6;k++)cells[i+k].value=d[k];const nx=Math.min(i+d.length,5);cells[nx].focus();sync()}
+cells.forEach((c,i)=>{
+  c.addEventListener('input',e=>{const v=c.value.replace(/\D/g,'');if(v.length>1){c.value='';fillFrom(i,v);return}c.value=v;if(v&&i<5)cells[i+1].focus();sync()});
+  c.addEventListener('keydown',e=>{if(e.key==='Backspace'&&!c.value&&i>0){cells[i-1].value='';cells[i-1].focus();e.preventDefault()}
+    if(e.key==='ArrowLeft'&&i>0)cells[i-1].focus();if(e.key==='ArrowRight'&&i<5)cells[i+1].focus()});
+  c.addEventListener('paste',e=>{e.preventDefault();fillFrom(i,(e.clipboardData||window.clipboardData).getData('text'))});
+  c.addEventListener('focus',()=>c.select());
+});
+form.addEventListener('submit',e=>{sync();if(hidden.value.length<6){e.preventDefault();sent=false;cells[Math.max(0,cells.findIndex(c=>!c.value))].focus()}});
+window.addEventListener('pageshow',()=>{sent=false;cells.forEach(c=>c.value='');hidden.value='';cells[0].focus()});
+</script>
+{% endblock %}
