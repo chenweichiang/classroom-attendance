@@ -2,6 +2,17 @@
 
 版號採語意化版本。Versions follow semantic versioning.
 
+## 未發布 Unreleased
+
+程式沒有變動，只改文件與新增 CI。No code changes; documentation and CI only.
+
+- 新增 GitHub Actions：每個 PR 與 push 到 `main` 跑 `tests/gate.sh --quick`（Ubuntu 24.04、Python 3.12）。
+  Added a GitHub Actions workflow running `tests/gate.sh --quick` on pull requests and pushes to `main` (Ubuntu 24.04, Python 3.12).
+- README：補上全新 Ubuntu 需要的 `python3-venv`、uv、curl、sqlite3 與 `playwright install --with-deps`；範例名冊改放 `data/rosters/`，不再留在 repo 根目錄被提交或打包進映像檔；部署改用 `chown -R`，避免先跑過快速開始時資料庫唯讀。
+  README: list what a fresh Ubuntu needs (`python3-venv`, uv, curl, sqlite3, `playwright install --with-deps`); keep the sample roster under `data/rosters/` so it is neither committed nor copied into the image; use `chown -R` so a database left by the quick start stays writable.
+- 記錄已知問題：一條以耗時判斷鎖死的單元測試在較慢的 CPU 上必定失敗，CI 暫時排除。
+  Documented a known issue: a unit test that detects deadlock by elapsed time always fails on slower CPUs; CI deselects it for now.
+
 ## v1.0.0 — 2026-09-21
 
 第一個公開版本，內容等同作者 2026-09-21 部署在自己課堂上的版本。
