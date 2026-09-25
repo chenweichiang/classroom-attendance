@@ -51,7 +51,13 @@ Also there: manual sign-in for a dead phone, excused absences, voiding a whole s
 
 ## Quick start
 
-Local, no Docker:
+Local, no Docker. Use Python 3.12, the version the Docker image and CI run, with the `venv` module. A fresh Ubuntu 24.04 ships neither `python3-venv` nor, on minimal and server images, Python itself:
+
+```bash
+sudo apt install python3 python3-venv    # Ubuntu / Debian; skip on macOS
+```
+
+Then, from the repository root:
 
 ```bash
 python3 -m venv .venv && .venv/bin/pip install -r requirements.txt
@@ -59,10 +65,15 @@ python3 -m venv .venv && .venv/bin/pip install -r requirements.txt
 export ATTEND_SECRET=$(python3 -c "import secrets;print(secrets.token_hex(32))")
 export ATTEND_TEACHER_PASSWORD=change-me
 
-printf 'student_id,name,class\nS001,王小明,Demo\nS002,陳大文,Demo\n' > roster.csv
-.venv/bin/python manage.py import-roster --code DEMO --name "Demo course" --csv roster.csv
+mkdir -p data/rosters
+printf 'student_id,name,class\nS001,王小明,Demo\nS002,陳大文,Demo\n' > data/rosters/demo.csv
+.venv/bin/python manage.py import-roster --code DEMO --name "Demo course" --csv data/rosters/demo.csv
 .venv/bin/uvicorn app:app --port 8000
 ```
+
+Keep roster files under `data/`. That directory is excluded from git and from the Docker build context; a CSV left in the repository root is neither, so `git add .` would commit it and `docker compose build` would copy it into the image.
+
+The two `export` lines only last for the current shell. The server refuses to start without them (`需要環境變數 ATTEND_SECRET 與 ATTEND_TEACHER_PASSWORD`), and a new `ATTEND_SECRET` in a new shell invalidates every phone bound so far, so for anything longer than a quick look put them in a file you `source`.
 
 Open <http://127.0.0.1:8000/t> and log in. The QR encodes `ATTEND_BASE_URL` (default `http://127.0.0.1:8000`), so a real phone can only follow it once that variable points at an address the phone can reach.
 
@@ -72,9 +83,11 @@ Roster CSV columns are `student_id`, `name`, `class` (the Chinese headers `學�
 
 ```bash
 cp .env.example .env && chmod 600 .env      # fill in the three required values
-mkdir -p data && sudo chown 10001:10001 data
+mkdir -p data && sudo chown -R 10001:10001 data
 docker compose build && docker compose up -d
 ```
+
+`-R` matters if you ran the quick start in the same directory first. Without it, `data/attend.db` stays owned by your own user, the container (uid 10001) cannot write to it, and the health check still reports *healthy* while *Start* fails with a 500 (`sqlite3.OperationalError: attempt to write a readonly database` in `docker compose logs`).
 
 The container listens on `127.0.0.1:3009`, runs as a non-root user with a read-only filesystem and all capabilities dropped. Put a TLS-terminating reverse proxy in front of it. With Caddy:
 
@@ -125,12 +138,12 @@ Command line:
 
 ```bash
 python manage.py list
-python manage.py import-roster --code DEMO --name "Demo course" --csv roster.csv [--prune]
+python manage.py import-roster --code DEMO --name "Demo course" --csv data/rosters/demo.csv [--prune]
 python manage.py set --code DEMO --key qr_grace --value 30
 python manage.py delete-course --code DEMO
 ```
 
-In Docker, prefix with `docker compose exec -T attend`. A roster can be piped in without touching the server's disk: `cat roster.csv | ssh host 'cd /path && docker compose exec -T attend python manage.py import-roster --code DEMO --name "Demo" --csv /dev/stdin'`.
+In Docker, prefix with `docker compose exec -T attend`. Paths are then resolved inside the container, where `data/` is mounted at `/data`, so a local `data/rosters/demo.csv` becomes `--csv /data/rosters/demo.csv`. A roster can also be piped in without touching the server's disk: `cat data/rosters/demo.csv | ssh host 'cd /path && docker compose exec -T attend python manage.py import-roster --code DEMO --name "Demo" --csv /dev/stdin'`.
 
 `scripts/parse_rosters.py` is an example of turning registrar exports into that CSV. It handles two formats used in Taiwan (NTHU's Big5 class list and NTUB's HTML-disguised-as-XLS export); expect to adapt it to your own school.
 
@@ -142,12 +155,25 @@ Nothing in this repository is real student data. Test fixtures use invented IDs 
 
 ## Tests
 
+Besides Python 3.12 and `python3-venv` from the quick start, the test gate needs:
+
+- [uv](https://docs.astral.sh/uv/getting-started/installation/), to install the pinned tool versions.
+- `curl`. `tests/gate.sh` polls `/healthz` with it before each server-backed layer. Without it every such layer fails with `伺服器啟動失敗` (server failed to start) even though the server log shows it running. Minimal Ubuntu images do not include it: `sudo apt install curl`.
+- For `--full` only, the `sqlite3` command-line tool (`sudo apt install sqlite3`), used by the load layer.
+
 ```bash
 uv venv .venv && uv pip install -p .venv/bin/python -r requirements.txt -r tests/requirements-dev.lock
-.venv/bin/python -m playwright install chromium webkit
-tests/gate.sh --quick     # nine layers, a few minutes
+.venv/bin/python -m playwright install --with-deps chromium webkit
+tests/gate.sh --quick     # nine layers, about six minutes on a 4-core cloud VM
 tests/gate.sh --full      # adds real-clock timing, load, classroom rehearsal, flakiness
 ```
+
+- If `.venv` already exists from the quick start, run only the `uv pip install` part. Current uv (0.12) stops with `A virtual environment already exists at: .venv`, and because the line is chained with `&&`, nothing gets installed. `uv venv --clear .venv` replaces the environment if that is what you want.
+- `--with-deps` installs WebKit's system libraries through `apt` and asks for `sudo`; on a fresh Ubuntu, WebKit does not start without them. On macOS the flag does nothing and can stay.
+- Each layer's full output goes to `/tmp/attend-gate/<layer>.log`.
+- Known issue: on CPUs slower than the author's, `tests/test_teacher_friction.py::test_checkin_ok_events_do_not_deadlock_main_transaction` fails with `耗時 11.14s，疑似 database is locked 卡住`. It is not a lock. The test times 20 PIN hashes (PBKDF2-SHA256, 600,000 iterations) against a 6-second limit, and each hash takes about 0.45 s on a typical cloud VM. CI deselects this one test; see [`.github/workflows/test.yml`](.github/workflows/test.yml).
+
+CI runs `tests/gate.sh --quick` on every pull request and every push to `main` (the same nine layers; the four `--full` layers depend on wall-clock timing or machine load and stay local).
 
 The layers are static analysis, unit tests with 97% branch coverage, a Hypothesis state machine holding seven invariants, scenario scripts, Schemathesis fuzzing, and Playwright end-to-end runs with Chromium as the teacher and WebKit as an iPhone. Details are in [`tests/README.md`](tests/README.md) (Chinese).
 
