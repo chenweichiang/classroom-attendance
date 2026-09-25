@@ -17,7 +17,20 @@ tests/mutation.sh "app.x_do_checkin*"    # 對動到的函式跑突變測試（�
 
 每層的完整輸出在 `/tmp/attend-gate/<層名>.log`，終端機只印一行結果，失敗才印該 log 最後 15 行，結尾印總表。伺服器埠號由腳本自己找空的（2026-09-17 起 8765 被別的行程佔著，舊的 `run_all.sh` 從第 4 層起全沒跑而且沒人發現；`run_all.sh` 現在只是轉呼叫 `gate.sh`）。
 
-安裝：`uv pip install -p .venv/bin/python -r tests/requirements-dev.txt && .venv/bin/python -m playwright install chromium webkit`。版本鎖定值在 `tests/requirements-dev.lock`，工具設定集中在 `pyproject.toml`。
+安裝（與根目錄 README 的「測試」一節相同，先備條件也寫在那裡：uv、curl，`--full` 另需 sqlite3 指令列工具）：
+
+```bash
+uv venv .venv && uv pip install -p .venv/bin/python -r requirements.txt -r tests/requirements-dev.lock
+.venv/bin/python -m playwright install --with-deps chromium webkit
+```
+
+裝的是 `tests/requirements-dev.lock` 的鎖定版本；`tests/requirements-dev.txt` 是產生 lock 的輸入，只列套件名、不鎖版本，直接拿來裝會拿到當天最新版，與 CI 不一致。工具設定集中在 `pyproject.toml`。
+
+## CI
+
+`.github/workflows/test.yml` 在每個 pull request 與每次 push 到 `main` 時，於 GitHub 的 `ubuntu-24.04`、Python 3.12 上跑 `tests/gate.sh --quick`，失敗時把 `/tmp/attend-gate/*.log` 上傳成 artifact。quick 九層全跑；full 多的四層（`realtime`、`load`、`rehearsal`、`flaky`）依賴實際時鐘或機器負載，共用 runner 上結果不穩定，不進 CI。
+
+CI 用 `PYTEST_ADDOPTS` 排除一條測試：`test_teacher_friction.py::test_checkin_ok_events_do_not_deadlock_main_transaction`。它用「總耗時 < 6 秒」判斷是否鎖死，但過程含 20 次 PBKDF2-SHA256（600,000 次迭代）PIN 雜湊，2026-09-25 在 4 核雲端 x86 機器實測每次約 0.45 秒，沒有鎖死也要 10 秒以上。排除後 `unit` 層覆蓋率仍是 97.44%，過 97% 門檻。測試本身待私人 repo 那邊改成不依 CPU 速度的判準後，再把這行拿掉。
 
 ## 每一層在抓什麼
 

@@ -53,7 +53,13 @@
 
 ## 快速開始
 
-本機直接跑，不用 Docker：
+本機直接跑，不用 Docker。請用 Python 3.12（Docker 映像與 CI 用的版本），而且要有 `venv` 模組。全新的 Ubuntu 24.04 沒有 `python3-venv`，最小安裝與伺服器版連 Python 本身都沒有：
+
+```bash
+sudo apt install python3 python3-venv    # Ubuntu／Debian；macOS 略過這步
+```
+
+接著在 repo 根目錄：
 
 ```bash
 python3 -m venv .venv && .venv/bin/pip install -r requirements.txt
@@ -61,10 +67,15 @@ python3 -m venv .venv && .venv/bin/pip install -r requirements.txt
 export ATTEND_SECRET=$(python3 -c "import secrets;print(secrets.token_hex(32))")
 export ATTEND_TEACHER_PASSWORD=change-me
 
-printf 'student_id,name,class\nS001,王小明,示範班\nS002,陳大文,示範班\n' > roster.csv
-.venv/bin/python manage.py import-roster --code DEMO --name "示範課程" --csv roster.csv
+mkdir -p data/rosters
+printf 'student_id,name,class\nS001,王小明,示範班\nS002,陳大文,示範班\n' > data/rosters/demo.csv
+.venv/bin/python manage.py import-roster --code DEMO --name "示範課程" --csv data/rosters/demo.csv
 .venv/bin/uvicorn app:app --port 8000
 ```
+
+名冊檔放在 `data/` 底下。這個目錄不進 git，也不進 Docker 建置內容；放在 repo 根目錄的 CSV 兩邊都不排除，`git add .` 會把它提交進去，`docker compose build` 會把它複製進映像檔。
+
+兩行 `export` 只在目前這個 shell 有效。沒有這兩個變數伺服器不會啟動（`需要環境變數 ATTEND_SECRET 與 ATTEND_TEACHER_PASSWORD`），而換一個 shell 重新產生的 `ATTEND_SECRET` 會讓先前綁定的手機全部失效，所以不只是看一眼的話，請寫進一個檔案再 `source`。
 
 瀏覽器開 <http://127.0.0.1:8000/t> 登入。QR 的內容來自 `ATTEND_BASE_URL`（預設 `http://127.0.0.1:8000`），所以要讓真的手機掃得進來，這個變數必須設成手機連得到的網址。
 
@@ -74,9 +85,11 @@ printf 'student_id,name,class\nS001,王小明,示範班\nS002,陳大文,示範�
 
 ```bash
 cp .env.example .env && chmod 600 .env      # 填三個必填值
-mkdir -p data && sudo chown 10001:10001 data
+mkdir -p data && sudo chown -R 10001:10001 data
 docker compose build && docker compose up -d
 ```
+
+如果先在同一個目錄跑過快速開始，`-R` 不能省。少了它，`data/attend.db` 仍屬於你自己的帳號，容器（uid 10001）寫不進去；健康檢查照樣顯示 healthy，按「開始點名」卻回 500（`docker compose logs` 裡是 `sqlite3.OperationalError: attempt to write a readonly database`）。
 
 容器只聽 `127.0.0.1:3009`，以非 root 帳號執行，檔案系統唯讀，權限全數卸除。前面要有一台終結 TLS 的反向代理。以 Caddy 為例：
 
@@ -127,12 +140,12 @@ attend.example.edu {
 
 ```bash
 python manage.py list
-python manage.py import-roster --code DEMO --name "示範課程" --csv roster.csv [--prune]
+python manage.py import-roster --code DEMO --name "示範課程" --csv data/rosters/demo.csv [--prune]
 python manage.py set --code DEMO --key qr_grace --value 30
 python manage.py delete-course --code DEMO
 ```
 
-在 Docker 裡，前面加 `docker compose exec -T attend`。名冊可以直接用管線送進去，不落在伺服器磁碟上：`cat roster.csv | ssh 主機 'cd /路徑 && docker compose exec -T attend python manage.py import-roster --code DEMO --name "示範課程" --csv /dev/stdin'`。
+在 Docker 裡，前面加 `docker compose exec -T attend`。這時路徑是容器裡的路徑，`data/` 掛在 `/data`，所以本機的 `data/rosters/demo.csv` 要寫成 `--csv /data/rosters/demo.csv`。名冊也可以直接用管線送進去，不落在伺服器磁碟上：`cat data/rosters/demo.csv | ssh 主機 'cd /路徑 && docker compose exec -T attend python manage.py import-roster --code DEMO --name "示範課程" --csv /dev/stdin'`。
 
 `scripts/parse_rosters.py` 是把教務系統匯出檔轉成上述 CSV 的範例，處理清大校務資訊系統的選課名單（Big5 文字檔）與北商的 PoolExport（副檔名是 xls、內容其實是 HTML，一個檔可能含兩門課）。別的學校要照自己的格式改。
 
@@ -144,12 +157,25 @@ python manage.py delete-course --code DEMO
 
 ## 測試
 
+除了快速開始用到的 Python 3.12 與 `python3-venv`，測試閘門還需要：
+
+- [uv](https://docs.astral.sh/uv/getting-started/installation/)，用來裝鎖定版本的工具鏈。
+- `curl`。`tests/gate.sh` 每一層要起伺服器時，都用它輪詢 `/healthz`；沒有的話，這些層全部顯示「伺服器啟動失敗」，但伺服器 log 其實顯示已經啟動。Ubuntu 最小安裝沒有附：`sudo apt install curl`。
+- 只有 `--full` 需要：`sqlite3` 指令列工具（`sudo apt install sqlite3`），壓測層用。
+
 ```bash
 uv venv .venv && uv pip install -p .venv/bin/python -r requirements.txt -r tests/requirements-dev.lock
-.venv/bin/python -m playwright install chromium webkit
-tests/gate.sh --quick     # 九層，幾分鐘
+.venv/bin/python -m playwright install --with-deps chromium webkit
+tests/gate.sh --quick     # 九層，4 核雲端虛擬機約六分鐘
 tests/gate.sh --full      # 再加真實時鐘計時、壓測、教室彩排、不穩定測試偵測
 ```
+
+- 快速開始已經建過 `.venv` 的話，只跑 `uv pip install` 那段。目前的 uv（0.12）遇到既有環境會以 `A virtual environment already exists at: .venv` 結束，而這行用 `&&` 串起來，後面什麼都不會裝。確定要重建就用 `uv venv --clear .venv`。
+- `--with-deps` 會透過 `apt` 裝 WebKit 需要的系統函式庫，要輸入 `sudo` 密碼；全新的 Ubuntu 少了這些，WebKit 啟動不了。macOS 上這個旗標不做任何事，留著無妨。
+- 每一層的完整輸出在 `/tmp/attend-gate/<層名>.log`。
+- 已知問題：CPU 比作者的機器慢時，`tests/test_teacher_friction.py::test_checkin_ok_events_do_not_deadlock_main_transaction` 會以「耗時 11.14s，疑似 database is locked 卡住」失敗。那不是鎖死：這條測試在 6 秒門檻內做 20 次 PIN 雜湊（PBKDF2-SHA256，600,000 次迭代），一般雲端虛擬機每次約 0.45 秒。CI 只排除這一條，見 [`.github/workflows/test.yml`](.github/workflows/test.yml)。
+
+每個 pull request 與每次 push 到 `main`，CI 都會跑 `tests/gate.sh --quick`（同樣九層；`--full` 多的四層依賴實際時鐘或機器負載，留在本機跑）。
 
 九層是靜態分析、單元測試（分支覆蓋 97%）、以 Hypothesis 狀態機守住七條不變式、情境腳本、Schemathesis 模糊測試，以及 Playwright 端對端（Chromium 當老師、WebKit 當 iPhone）。每一層在抓什麼、抓不到什麼，寫在 [`tests/README.md`](tests/README.md)。
 
