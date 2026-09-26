@@ -1778,6 +1778,17 @@ async def no_store(req: Request, call_next):
 
 @app.get("/healthz", response_class=PlainTextResponse)
 def healthz():
+    """除了 SELECT 1 能不能通，另外檢查資料庫檔與所在目錄是不是容器帳號可寫——部署時
+    chown 沒加 -R 就會出現「檔案是舊擁有者、目錄是新的」或反過來的情況，SELECT 1 照樣過，
+    但一按「開始點名」就 500（readonly database）。WAL 模式寫入還要能在目錄裡建
+    -wal／-shm，所以目錄也要可寫，不只檔案。這裡只檢查權限，不在健康檢查裡真的寫入
+    （上課中每次健康檢查都搶寫入鎖不划算）。"""
+    db_file = Path(DB_PATH)
+    db_dir = db_file.parent
+    if db_file.exists() and not os.access(db_file, os.W_OK):
+        return PlainTextResponse("database file not writable", status_code=503)
+    if not os.access(db_dir, os.W_OK):
+        return PlainTextResponse("database directory not writable (WAL needs -wal/-shm files there)", status_code=503)
     with db() as con:
         con.execute("SELECT 1")
     return "ok"

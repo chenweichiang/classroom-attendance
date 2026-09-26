@@ -1,4 +1,8 @@
 data/
+# 名冊含學生學號與姓名，放在 repo 根目錄的名冊檔也不進映像。
+*.csv
+*.xls
+*.xlsx
 tests/
 .env
 .env.*

@@ -1,4 +1,8 @@
 data/
+# 名冊含學生學號與姓名。data/ 之外，放在 repo 根目錄的名冊檔也一律排除。
+*.csv
+*.xls
+*.xlsx
 __pycache__/
 *.db
 *.db-*
