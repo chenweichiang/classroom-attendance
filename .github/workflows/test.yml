@@ -43,15 +43,9 @@ jobs:
       - name: Install Playwright browsers
         run: .venv/bin/python -m playwright install --with-deps chromium webkit
 
+      # 原本排除 test_checkin_ok_events_do_not_deadlock_main_transaction（以總耗時判斷鎖死，慢 CPU 必定失敗）；
+      # v1.0.1 起該測試改量單次請求 < 5 秒，不再依賴 PIN 雜湊速度，排除已拿掉。
       - name: tests/gate.sh --quick
-        env:
-          # test_checkin_ok_events_do_not_deadlock_main_transaction 以「總耗時 < 6 秒」判斷有沒有鎖死，
-          # 但那段流程包含 20 次 PBKDF2-SHA256（600,000 次迭代）PIN 雜湊，耗時與 CPU 成正比：
-          # 2026-09-25 在一般雲端 x86 機器上每次約 0.45 秒，沒有鎖死也要 10 秒以上，必定失敗。
-          # 這條測試由私人 repo 匯出、公開版不能改，先在 CI 排除；原因與重現步驟記在引入本檔的 PR 說明。
-          # 排除後覆蓋率仍達 97% 門檻（本機實測 97.44%）。
-          PYTEST_ADDOPTS: >-
-            --deselect tests/test_teacher_friction.py::test_checkin_ok_events_do_not_deadlock_main_transaction
         run: tests/gate.sh --quick
 
       - name: Upload gate logs

@@ -160,7 +160,7 @@ python manage.py delete-course --code DEMO
 除了快速開始用到的 Python 3.12 與 `python3-venv`，測試閘門還需要：
 
 - [uv](https://docs.astral.sh/uv/getting-started/installation/)，用來裝鎖定版本的工具鏈。
-- `curl`。`tests/gate.sh` 每一層要起伺服器時，都用它輪詢 `/healthz`；沒有的話，這些層全部顯示「伺服器啟動失敗」，但伺服器 log 其實顯示已經啟動。Ubuntu 最小安裝沒有附：`sudo apt install curl`。
+- `curl`。`tests/gate.sh` 每一層要起伺服器時，都用它輪詢 `/healthz`；沒有的話，閘門會在第一層之前停下並說明缺什麼（v1.0.0 以前是每一層都顯示「伺服器啟動失敗」，但伺服器其實已經啟動）。Ubuntu 最小安裝沒有附：`sudo apt install curl`。
 - 只有 `--full` 需要：`sqlite3` 指令列工具（`sudo apt install sqlite3`），壓測層用。
 
 ```bash
@@ -173,7 +173,6 @@ tests/gate.sh --full      # 再加真實時鐘計時、壓測、教室彩排、�
 - 快速開始已經建過 `.venv` 的話，只跑 `uv pip install` 那段。目前的 uv（0.12）遇到既有環境會以 `A virtual environment already exists at: .venv` 結束，而這行用 `&&` 串起來，後面什麼都不會裝。確定要重建就用 `uv venv --clear .venv`。
 - `--with-deps` 會透過 `apt` 裝 WebKit 需要的系統函式庫，要輸入 `sudo` 密碼；全新的 Ubuntu 少了這些，WebKit 啟動不了。macOS 上這個旗標不做任何事，留著無妨。
 - 每一層的完整輸出在 `/tmp/attend-gate/<層名>.log`。
-- 已知問題：CPU 比作者的機器慢時，`tests/test_teacher_friction.py::test_checkin_ok_events_do_not_deadlock_main_transaction` 會以「耗時 11.14s，疑似 database is locked 卡住」失敗。那不是鎖死：這條測試在 6 秒門檻內做 20 次 PIN 雜湊（PBKDF2-SHA256，600,000 次迭代），一般雲端虛擬機每次約 0.45 秒。CI 只排除這一條，見 [`.github/workflows/test.yml`](.github/workflows/test.yml)。
 
 每個 pull request 與每次 push 到 `main`，CI 都會跑 `tests/gate.sh --quick`（同樣九層；`--full` 多的四層依賴實際時鐘或機器負載，留在本機跑）。
 

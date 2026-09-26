@@ -110,30 +110,97 @@ def test_checkin_ok_events_do_not_deadlock_main_transaction(h):
     log_event 另開連線去寫 events 會跟它互鎖到 busy timeout（10 秒），e2e 卡住等不到 #receipt。
     連續多次含成功與重複送出（both 走 already 分支）、以及錯誤 PIN（走 reject 分支）都不得變慢或出現
     database is locked；events 記錄的筆數要精確。
-    A2：已綁裝置回簽免 PIN，錯 PIN 那次改用另一支未綁定的裝置才吃得到 PIN 驗證。"""
+    A2：已綁裝置回簽免 PIN，錯 PIN 那次改用另一支未綁定的裝置才吃得到 PIN 驗證。
+    2026-09-26 修正：原本斷言「10 輪×3 次請求的總時間 < 6 秒」，但 PIN 雜湊（pbkdf2 600,000 輪）
+    在較慢機器上單次就要約 0.45 秒，20 次雜湊（每輪 2 次）就吃掉 9 秒以上，會把單純「機器比較慢」
+    誤判成「疑似 database is locked」（見 test_single_request_ceiling_survives_slow_pin_hash 的證明）。
+    真正的 bug 特徵是單一請求卡到 busy timeout（10 秒）以上，所以改成量每一次請求的耗時，
+    斷言單次最慢 < 5 秒（遠低於 10 秒 busy timeout、又遠高於一次 PIN 雜湊）；總時間不再斷言。"""
     with h.A.db() as con:
         for i in range(10):
             con.execute("INSERT OR IGNORE INTO students(course_id, student_id, name) VALUES(?,?,?)",
                         (h.cid["CD"], f"BURST{i:03d}", f"衝刺{i}"))
     sid = h.open("CD")
-    t0 = time.time()
+    worst = {"elapsed": -1.0, "round": None, "kind": None}
+
+    def timed(round_i, kind, fn):
+        t0 = time.time()
+        result = fn()
+        elapsed = time.time() - t0
+        if elapsed > worst["elapsed"]:
+            worst.update(elapsed=elapsed, round=round_i, kind=kind)
+        return result
+
     for i in range(10):
         stu = f"BURST{i:03d}"
-        r1 = h.checkin(sid, f"burstdev{i}", stu, name=f"衝刺{i}", pin="1234")
+        r1 = timed(i, "首次簽到", lambda: h.checkin(sid, f"burstdev{i}", stu, name=f"衝刺{i}", pin="1234"))
         assert r1["ok"] is True and r1.get("again") is not True, r1
-        r2 = h.checkin(sid, f"burstdev{i}", stu, name=f"衝刺{i}", pin="1234")  # 重複送出，走 already 分支
+        r2 = timed(i, "重複送出", lambda: h.checkin(sid, f"burstdev{i}", stu, name=f"衝刺{i}", pin="1234"))  # 走 already 分支
         assert r2["ok"] is True and r2["again"] is True, r2
-        bad = h.dev(f"burstdev{i}-b").post("/api/checkin", data={
-            "grant": h.grant(sid, h.dev(f"burstdev{i}-b")), "student_id": stu, "pin": "0000"})
+        bad_dev = h.dev(f"burstdev{i}-b")
+        bad = timed(i, "錯誤 PIN", lambda: bad_dev.post("/api/checkin", data={
+            "grant": h.grant(sid, bad_dev), "student_id": stu, "pin": "0000"}))
         assert bad.status_code == 401, bad.text
-    elapsed = time.time() - t0
-    assert elapsed < 6, f"耗時 {elapsed:.2f}s，疑似 database is locked 卡住（bug 重現時單次重複送出就要 10 秒以上）"
+    assert worst["elapsed"] < 5, (
+        f"單次請求耗時 {worst['elapsed']:.2f}s（第 {worst['round']} 輪、{worst['kind']}），"
+        "疑似 database is locked 卡住（bug 重現時單次會卡到 busy timeout 10 秒以上）"
+    )
     with h.A.db() as con:
         kinds = {}
         for r in con.execute("SELECT kind, COUNT(*) n FROM events WHERE session_id=? GROUP BY kind", (sid,)):
             kinds[r["kind"]] = r["n"]
     assert kinds.get("checkin_ok") == 20, kinds  # 10 人各 1 首簽 + 1 重複送出
     assert kinds.get("checkin_reject") == 10, kinds  # 10 人各 1 次錯 PIN
+
+
+def test_single_request_ceiling_survives_slow_pin_hash(h, monkeypatch):
+    """迴歸測試：證明上面那條測試原本的「總時間 < 6 秒」判準會被較慢的 PIN 雜湊拖垮而誤報，
+    新的「單次請求 < 5 秒」判準則不受影響。用固定 sleep 取代真實運算時間的差異來源
+    （不是在猜計時，是直接控制耗時本身，這裡就是在測計時判準的行為，符合例外）：
+    每次 hash_pin 呼叫多花 0.37 秒，模擬 BUGLOG 記錄的較慢機器單次雜湊約 0.45 秒；
+    10 輪×每輪最多 2 次雜湊呼叫，20 次 × 0.37 秒 = 7.4 秒，必定推過舊門檻的 6 秒，
+    但單次請求的雜湊次數固定是 1 次，遠低於新門檻的 5 秒——不會是巧合，是刻意設計的。
+    2026-09-26 執行證明：把這裡的斷言暫時換回舊寫法（`assert elapsed < 6`）跑過一次，
+    在同樣的 monkeypatch 下量到 9.38 秒、確實失敗，證實舊判準會誤報。"""
+    real_hash_pin = h.A.hash_pin
+
+    def slow_hash_pin(pin, salt):
+        time.sleep(0.37)
+        return real_hash_pin(pin, salt)
+    monkeypatch.setattr(h.A, "hash_pin", slow_hash_pin)
+
+    with h.A.db() as con:
+        for i in range(10):
+            con.execute("INSERT OR IGNORE INTO students(course_id, student_id, name) VALUES(?,?,?)",
+                        (h.cid["CD"], f"SLOW{i:03d}", f"慢速{i}"))
+    sid = h.open("CD")
+    total_t0 = time.time()
+    worst = 0.0
+    for i in range(10):
+        stu = f"SLOW{i:03d}"
+        t0 = time.time()
+        r1 = h.checkin(sid, f"slowdev{i}", stu, name=f"慢速{i}", pin="1234")
+        worst = max(worst, time.time() - t0)
+        assert r1["ok"] is True and r1.get("again") is not True, r1
+        t0 = time.time()
+        r2 = h.checkin(sid, f"slowdev{i}", stu, name=f"慢速{i}", pin="1234")
+        worst = max(worst, time.time() - t0)
+        assert r2["ok"] is True and r2["again"] is True, r2
+        bad_dev = h.dev(f"slowdev{i}-b")
+        t0 = time.time()
+        bad = bad_dev.post("/api/checkin", data={
+            "grant": h.grant(sid, bad_dev), "student_id": stu, "pin": "0000"})
+        worst = max(worst, time.time() - t0)
+        assert bad.status_code == 401, bad.text
+    total_elapsed = time.time() - total_t0
+
+    assert worst < 5, f"單次最慢 {worst:.2f}s，才是真正卡住的訊號（busy timeout 是 10 秒）"
+    # 證明本身：同一段正常流程（沒有任何死鎖），舊的「總時間 < 6 秒」判準在這裡會被純粹的
+    # 雜湊耗時拖垮而誤報——這一行預期會通過（total_elapsed 確實 >= 6），刻意保留來記錄事實。
+    assert total_elapsed >= 6, (
+        f"總耗時只有 {total_elapsed:.2f}s，沒有超過舊門檻 6 秒，不足以證明舊判準真的會誤報，"
+        "請確認 monkeypatch 的 sleep 秒數設定是否還有效"
+    )
 
 
 # ───────────────────────── B004/B026：/api/t/session/{sid}/state 的 funnel 與 stuck ─────────────────────────

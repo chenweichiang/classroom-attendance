@@ -158,7 +158,7 @@ Nothing in this repository is real student data. Test fixtures use invented IDs 
 Besides Python 3.12 and `python3-venv` from the quick start, the test gate needs:
 
 - [uv](https://docs.astral.sh/uv/getting-started/installation/), to install the pinned tool versions.
-- `curl`. `tests/gate.sh` polls `/healthz` with it before each server-backed layer. Without it every such layer fails with `伺服器啟動失敗` (server failed to start) even though the server log shows it running. Minimal Ubuntu images do not include it: `sudo apt install curl`.
+- `curl`. `tests/gate.sh` polls `/healthz` with it before each server-backed layer. If it is missing, the gate stops before the first layer and says so (up to v1.0.0 every such layer failed with `伺服器啟動失敗`, server failed to start, although the server was running). Minimal Ubuntu images do not include it: `sudo apt install curl`.
 - For `--full` only, the `sqlite3` command-line tool (`sudo apt install sqlite3`), used by the load layer.
 
 ```bash
@@ -171,7 +171,6 @@ tests/gate.sh --full      # adds real-clock timing, load, classroom rehearsal, f
 - If `.venv` already exists from the quick start, run only the `uv pip install` part. Current uv (0.12) stops with `A virtual environment already exists at: .venv`, and because the line is chained with `&&`, nothing gets installed. `uv venv --clear .venv` replaces the environment if that is what you want.
 - `--with-deps` installs WebKit's system libraries through `apt` and asks for `sudo`; on a fresh Ubuntu, WebKit does not start without them. On macOS the flag does nothing and can stay.
 - Each layer's full output goes to `/tmp/attend-gate/<layer>.log`.
-- Known issue: on CPUs slower than the author's, `tests/test_teacher_friction.py::test_checkin_ok_events_do_not_deadlock_main_transaction` fails with `耗時 11.14s，疑似 database is locked 卡住`. It is not a lock. The test times 20 PIN hashes (PBKDF2-SHA256, 600,000 iterations) against a 6-second limit, and each hash takes about 0.45 s on a typical cloud VM. CI deselects this one test; see [`.github/workflows/test.yml`](.github/workflows/test.yml).
 
 CI runs `tests/gate.sh --quick` on every pull request and every push to `main` (the same nine layers; the four `--full` layers depend on wall-clock timing or machine load and stay local).
 

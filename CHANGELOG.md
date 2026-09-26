@@ -2,16 +2,22 @@
 
 版號採語意化版本。Versions follow semantic versioning.
 
-## 未發布 Unreleased
+## v1.0.1 — 2026-09-26
 
-程式沒有變動，只改文件與新增 CI。No code changes; documentation and CI only.
+四項修正，另新增 CI、補齊安裝文件。Four fixes, plus CI and fuller setup docs.
 
+- `/healthz` 除了查詢資料庫，也檢查資料庫檔與所在目錄是否可寫（WAL 要在目錄裡建 `-wal`／`-shm`），不可寫就回 503。先前 `chown` 沒加 `-R` 這類權限錯誤可能通過健康檢查，要到開始點名才出錯。
+  `/healthz` now also checks that the database file and its directory are writable (WAL creates `-wal`/`-shm` there) and returns 503 if not. A permission mistake such as a non-recursive `chown` could previously pass the health check and only fail once a session was opened.
+- `.gitignore` 與 `.dockerignore` 排除 `*.csv`、`*.xls`、`*.xlsx`：名冊含學生個資，放在 repo 根目錄時不會被提交，也不會打包進映像檔。
+  `.gitignore` and `.dockerignore` exclude `*.csv`, `*.xls` and `*.xlsx`, so a roster with student data left in the repository root is neither committed nor copied into the image.
+- 鎖死回歸測試改量每一次請求的耗時（< 5 秒），不再看總耗時，較慢的 CPU 不會再誤報；CI 不再排除這條測試。
+  The deadlock regression test now bounds each request (< 5 s) instead of the total, so slower CPUs no longer fail it; CI runs it again.
+- `tests/gate.sh` 一開始就檢查 `.venv`、`curl` 與 load 層用的 `sqlite3`，缺了直接說缺什麼，不再誤報「伺服器啟動失敗」。
+  `tests/gate.sh` checks for `.venv`, `curl` and, for the load layer, `sqlite3` before running anything, and names what is missing instead of reporting a failed server start.
 - 新增 GitHub Actions：每個 PR 與 push 到 `main` 跑 `tests/gate.sh --quick`（Ubuntu 24.04、Python 3.12）。
   Added a GitHub Actions workflow running `tests/gate.sh --quick` on pull requests and pushes to `main` (Ubuntu 24.04, Python 3.12).
 - README：補上全新 Ubuntu 需要的 `python3-venv`、uv、curl、sqlite3 與 `playwright install --with-deps`；範例名冊改放 `data/rosters/`，不再留在 repo 根目錄被提交或打包進映像檔；部署改用 `chown -R`，避免先跑過快速開始時資料庫唯讀。
   README: list what a fresh Ubuntu needs (`python3-venv`, uv, curl, sqlite3, `playwright install --with-deps`); keep the sample roster under `data/rosters/` so it is neither committed nor copied into the image; use `chown -R` so a database left by the quick start stays writable.
-- 記錄已知問題：一條以耗時判斷鎖死的單元測試在較慢的 CPU 上必定失敗，CI 暫時排除。
-  Documented a known issue: a unit test that detects deadlock by elapsed time always fails on slower CPUs; CI deselects it for now.
 
 ## v1.0.0 — 2026-09-21
 

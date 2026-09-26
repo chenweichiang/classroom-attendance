@@ -1,5 +1,9 @@
 """API 與頁面全覆蓋：每個端點在每個 phase 的行為、錯誤路徑、對帳。"""
+import os
+import stat
 import time, csv, io, threading
+
+import pytest
 
 
 def test_login_flow(client):
@@ -52,6 +56,46 @@ def test_public_pages_and_errors(client):
     v = hashlib.sha256(font.read_bytes()).hexdigest()[:10]
     assert f"ZhuqueFangsong-subset.woff2?v={v})" in client.get("/help").text
     assert client.get(f"/static/fonts/ZhuqueFangsong-subset.woff2?v={v}").status_code == 200
+
+
+# ───────────────────────── /healthz 要偵測「連得到但寫不進去」──────────────────────────
+# 部署時 chown 沒加 -R，資料庫檔或所在目錄可能不是容器帳號可寫；舊版 healthz 只跑 SELECT 1，
+# 這種情況照樣回 ok、Docker 顯示 healthy，但一按「開始點名」就 500（readonly database）。
+
+_ROOT_SKIP_REASON = "以 root 身分跑時 os.access 永遠回可寫，這條測試在 root 下驗不出東西"
+
+
+@pytest.mark.skipif(hasattr(os, "geteuid") and os.geteuid() == 0, reason=_ROOT_SKIP_REASON)
+def test_healthz_503_when_db_file_not_writable(A, client):
+    db_path = A.DB_PATH
+    with A.db() as con:
+        con.execute("SELECT 1")  # 確保檔案已經存在
+    old_mode = os.stat(db_path).st_mode
+    os.chmod(db_path, stat.S_IRUSR)
+    try:
+        r = client.get("/healthz")
+        assert r.status_code == 503, r.text
+        assert "writable" in r.text
+    finally:
+        os.chmod(db_path, old_mode)
+
+
+@pytest.mark.skipif(hasattr(os, "geteuid") and os.geteuid() == 0, reason=_ROOT_SKIP_REASON)
+def test_healthz_503_when_db_dir_not_writable(A, client):
+    db_dir = os.path.dirname(A.DB_PATH)
+    old_mode = os.stat(db_dir).st_mode
+    os.chmod(db_dir, stat.S_IRUSR | stat.S_IXUSR)  # 唯讀＋可進入，模擬目錄不可寫但檔案本身權限沒問題
+    try:
+        r = client.get("/healthz")
+        assert r.status_code == 503, r.text
+        assert "writable" in r.text
+    finally:
+        os.chmod(db_dir, old_mode)
+
+
+def test_healthz_ok_when_writable(client):
+    r = client.get("/healthz")
+    assert r.status_code == 200 and r.text == "ok"
 
 
 def test_code_page_paths(h):

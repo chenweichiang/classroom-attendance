@@ -12,6 +12,12 @@ set -u
 cd "$(dirname "$0")/.."
 
 PY=.venv/bin/python
+if [ ! -x "$PY" ]; then
+  # 合成名冊與每一層都要用它，缺了第一步就會失敗；先講清楚（2026-09-26）
+  echo "缺測試用虛擬環境 $PY，無法執行測試閘門。" >&2
+  echo "建法見 tests/README.md：uv venv .venv 後 uv pip install -p .venv/bin/python -r requirements.txt -r tests/requirements-dev.lock" >&2
+  exit 1
+fi
 LOGDIR=/tmp/attend-gate
 ROSTER=tests/fixtures/roster.csv
 mkdir -p "$LOGDIR" tests/fixtures
@@ -47,6 +53,22 @@ elif [ "$MODE" = "full" ]; then
   LAYERS="$QUICK_LAYERS $FULL_EXTRA"
 else
   LAYERS="$QUICK_LAYERS"
+fi
+
+# ── 先決條件：缺這些指令時，起伺服器的健康探測會一律失敗，訊息卻只會印「伺服器啟動失敗」
+#    （2026-09-26 修正：實測缺 curl 時伺服器其實有正常啟動，只是探測不到而已，誤導人去查
+#    程式而不是查環境）。這裡先講清楚缺什麼、怎麼裝，直接以非零離開碼結束，不要走到那一步──
+need_load_layer=0
+for l in $LAYERS; do [ "$l" = "load" ] && need_load_layer=1; done
+missing=()
+command -v curl >/dev/null 2>&1 || missing+=("curl（healthz 探測與登入用；macOS 內建應該就有，缺了可 brew install curl）")
+if [ "$need_load_layer" = "1" ]; then
+  command -v sqlite3 >/dev/null 2>&1 || missing+=("sqlite3（load 層直接查資料庫；macOS 內建應該就有，缺了可 brew install sqlite3）")
+fi
+if [ ${#missing[@]} -gt 0 ]; then
+  echo "缺必要指令，無法執行測試閘門：" >&2
+  for m in "${missing[@]}"; do echo "  - $m" >&2; done
+  exit 1
 fi
 
 # ── 動態選一個空埠，避開別的行程佔用（2026-09-10 8765 被 python -m http.server 佔走，

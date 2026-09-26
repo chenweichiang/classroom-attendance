@@ -228,3 +228,72 @@ def test_every_template_compiles(A):
     assert names
     for n in names:
         A.templates.env.get_template(n)
+
+
+# ───────────────────────── 名冊副檔名不得混入版控／映像 ─────────────────────────
+
+def _service_dir_if_real_checkout():
+    """mutmut 的 mutants/ 沙箱只複製原始碼（app.py／manage.py／templates／static／tests），
+    不含 .git、.gitignore、.dockerignore；這裡的測試驗的是專案根目錄的檔案，在沙箱裡沒有
+    對象可驗，跳過即可（不是放寬檢查，是這條規則在沙箱裡本來就不適用）。"""
+    import subprocess
+    from pathlib import Path
+
+    service_dir = Path(__file__).resolve().parent.parent
+    if not (service_dir / ".dockerignore").exists() or not (service_dir / ".gitignore").exists():
+        return None
+    in_repo = subprocess.run(
+        ["git", "rev-parse", "--is-inside-work-tree"],
+        cwd=service_dir, capture_output=True, text=True,
+    ).returncode == 0
+    return service_dir if in_repo else None
+
+
+def test_gitignore_and_dockerignore_exclude_roster_extensions():
+    """公開版舊的快速開始教人把名冊快速放在服務根目錄（例如 roster.csv），data/ 排除不到那裡；
+    名冊含真實學生學號姓名，兩個忽略清單都要擋住常見的名冊副檔名。這裡用假檔名驗證規則本身
+    （不讀、不建立任何真實名冊內容），不真的跑 docker build。"""
+    import fnmatch
+    import subprocess
+    import pytest
+
+    service_dir = _service_dir_if_real_checkout()
+    if service_dir is None:
+        pytest.skip("不在真實的 git 檢出目錄（例如 mutmut 沙箱），沒有 .gitignore／.dockerignore 可驗")
+    fake_names = ["roster.csv", "roster.xls", "roster.xlsx", "students.csv"]
+
+    # .gitignore：用 git check-ignore 驗（服務目錄本身在 server repo 版控內）
+    for name in fake_names:
+        r = subprocess.run(
+            ["git", "check-ignore", "-q", "--", name],
+            cwd=service_dir,
+        )
+        assert r.returncode == 0, f"{name} 沒有被 .gitignore 排除（git check-ignore 沒命中）"
+
+    # .dockerignore：docker 的樣式語法與 .gitignore 相容，這裡不跑 docker build，
+    # 改用 fnmatch 對逐行樣式做等價比對（單層檔名，不含目錄的樣式才適用 fnmatch 直接比對）
+    patterns = [
+        line.strip() for line in (service_dir / ".dockerignore").read_text().splitlines()
+        if line.strip() and not line.strip().startswith("#")
+    ]
+    for name in fake_names:
+        assert any(fnmatch.fnmatch(name, pat) for pat in patterns), (
+            f"{name} 沒有被 .dockerignore 任何一條樣式排除：{patterns}"
+        )
+
+
+def test_no_roster_csv_or_excel_tracked_in_git():
+    """先確認版控裡目前沒有任何名冊 csv／xls／xlsx 被追蹤——這條規則是「加排除規則」，
+    不是「事後清歷史」，若已有被追蹤的檔案代表情況不一樣，要停下來回報而不是自動處理。"""
+    import subprocess
+    import pytest
+
+    service_dir = _service_dir_if_real_checkout()
+    if service_dir is None:
+        pytest.skip("不在真實的 git 檢出目錄（例如 mutmut 沙箱），無法查 git ls-files")
+    r = subprocess.run(
+        ["git", "ls-files", "."],
+        cwd=service_dir, capture_output=True, text=True, check=True,
+    )
+    tracked = [line for line in r.stdout.splitlines() if line.lower().endswith((".csv", ".xls", ".xlsx"))]
+    assert tracked == [], f"已有名冊類檔案被 git 追蹤，需要人工判斷而非自動排除：{tracked}"
