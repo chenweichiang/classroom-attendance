@@ -24,15 +24,17 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          persist-credentials: false
 
       # 與 Dockerfile（python:3.12-slim）及 pyproject.toml 的 pythonVersion 一致
-      - uses: actions/setup-python@v7
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0  # v7.1.0
         with:
           python-version: "3.12"
 
-      # setup-uv 從 v8 起不再提供 v10 這類浮動主版號標籤，只能釘完整版號
-      - uses: astral-sh/setup-uv@v10.2.0
+      # 每個 action 都釘在 commit SHA，標籤被改指也不會換掉執行的程式；更新由 Dependabot 開 PR
+      - uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2  # v10.3.3
 
       - name: Install dependencies
         run: |
@@ -43,14 +45,12 @@ jobs:
       - name: Install Playwright browsers
         run: .venv/bin/python -m playwright install --with-deps chromium webkit
 
-      # 原本排除 test_checkin_ok_events_do_not_deadlock_main_transaction（以總耗時判斷鎖死，慢 CPU 必定失敗）；
-      # v1.0.1 起該測試改量單次請求 < 5 秒，不再依賴 PIN 雜湊速度，排除已拿掉。
       - name: tests/gate.sh --quick
         run: tests/gate.sh --quick
 
       - name: Upload gate logs
         if: failure()
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9  # v7.0.2
         with:
           name: attend-gate-logs
           path: /tmp/attend-gate/*.log

@@ -62,7 +62,7 @@ sudo apt install python3 python3-venv    # Ubuntu／Debian；macOS 略過這步
 接著在 repo 根目錄：
 
 ```bash
-python3 -m venv .venv && .venv/bin/pip install -r requirements.txt
+python3 -m venv .venv && .venv/bin/pip install --require-hashes -r requirements.lock
 
 export ATTEND_SECRET=$(python3 -c "import secrets;print(secrets.token_hex(32))")
 export ATTEND_TEACHER_PASSWORD=change-me
@@ -90,6 +90,8 @@ docker compose build && docker compose up -d
 ```
 
 如果先在同一個目錄跑過快速開始，`-R` 不能省。少了它，`data/attend.db` 仍屬於你自己的帳號，容器（uid 10001）寫不進去；健康檢查照樣顯示 healthy，按「開始點名」卻回 500（`docker compose logs` 裡是 `sqlite3.OperationalError: attempt to write a readonly database`）。
+
+映像的基底釘在固定的 digest，套件照 `requirements.lock` 的版本安裝並核對雜湊，同一個 commit 每次建出來的環境都一樣。`requirements.txt` 只列直接相依；重新產生鎖檔的指令寫在 `requirements.lock` 最上面。
 
 容器只聽 `127.0.0.1:3009`，以非 root 帳號執行，檔案系統唯讀，並移除所有 Linux capabilities。前面要有一台負責 HTTPS 的反向代理。以 Caddy 為例：
 

@@ -110,4 +110,5 @@ dl{margin:0}dt{font-weight:600;margin-top:10px}dd{margin:0 0 4px}
 <dt>更新名冊</dt><dd>整理成 CSV（欄位 student_id、name、class）後在伺服器跑 <code>manage.py import-roster</code>，重複執行安全，不會動到 PIN 與綁定，指令在專案的 OPERATIONS.md。</dd>
 <dt>資料</dt><dd>只存學號、姓名、簽到時間、裝置識別雜湊與連線 IP，學期結束匯出後刪庫。</dd>
 </dl>
+<p class="k">課堂點名 v{{ APP_VERSION }}</p>
 {% endblock %}

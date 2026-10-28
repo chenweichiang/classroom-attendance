@@ -1,0 +1,17 @@
+name: Suggestion / 建議
+description: A change to how attendance is taken, a setting, or the documentation. 點名流程、設定或文件的修改。
+labels: [enhancement]
+body:
+  - type: textarea
+    id: what
+    attributes:
+      label: What should change / 要改什麼
+    validations:
+      required: true
+  - type: textarea
+    id: why
+    attributes:
+      label: Why / 為什麼
+      description: The classroom situation where the current behaviour falls short. 目前的做法在什麼課堂情境下不夠用。
+    validations:
+      required: true

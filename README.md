@@ -60,7 +60,7 @@ sudo apt install python3 python3-venv    # Ubuntu / Debian; skip on macOS
 Then, from the repository root:
 
 ```bash
-python3 -m venv .venv && .venv/bin/pip install -r requirements.txt
+python3 -m venv .venv && .venv/bin/pip install --require-hashes -r requirements.lock
 
 export ATTEND_SECRET=$(python3 -c "import secrets;print(secrets.token_hex(32))")
 export ATTEND_TEACHER_PASSWORD=change-me
@@ -88,6 +88,8 @@ docker compose build && docker compose up -d
 ```
 
 `-R` matters if you ran the quick start in the same directory first. Without it, `data/attend.db` stays owned by your own user, the container (uid 10001) cannot write to it, and the health check still reports *healthy* while *Start* fails with a 500 (`sqlite3.OperationalError: attempt to write a readonly database` in `docker compose logs`).
+
+The image is built from a base image pinned by digest and installs the exact package versions in `requirements.lock`, checked against their hashes, so the same commit builds the same environment. `requirements.txt` lists the direct dependencies; the command that regenerates the lock is at the top of `requirements.lock`.
 
 The container listens on `127.0.0.1:3009`, runs as a non-root user with a read-only filesystem and all capabilities dropped. Put a TLS-terminating reverse proxy in front of it. With Caddy:
 

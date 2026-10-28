@@ -100,8 +100,10 @@ templates = Jinja2Templates(directory=str(BASE / "templates"))
 # 字型網址帶內容雜湊。靜態檔快取七天（Cloudflare 邊緣與瀏覽器），重做子集後網址不變的話，新字要等七天才看得到
 _FONT = BASE / "static" / "fonts" / "ZhuqueFangsong-subset.woff2"
 FONT_V = hashlib.sha256(_FONT.read_bytes()).hexdigest()[:10] if _FONT.is_file() else "0"
+APP_VERSION = "1.0.4"  # 發版時跟 CHANGELOG.md 最上面那一版一起改（tests/test_version.py 會比對）
 templates.env.globals.update(STATUS_LABEL=STATUS_LABEL, FLAG_LABEL=FLAG_LABEL, REJECT_REASON_LABEL=REJECT_REASON_LABEL,
-                             pct=lambda r: pct(r), BASE_HOST=BASE_URL.split("://", 1)[-1], FONT_V=FONT_V)  # noqa: PLW0108 pct 定義在下面，這裡直接傳函式名會撞 forward reference NameError，lambda 是刻意的延遲查找
+                             APP_VERSION=APP_VERSION, BASE_HOST=BASE_URL.split("://", 1)[-1], FONT_V=FONT_V,
+                             pct=lambda r: pct(r))  # noqa: PLW0108 pct 定義在下面，這裡直接傳函式名會撞 forward reference NameError，lambda 是刻意的延遲查找
 
 
 # 工具

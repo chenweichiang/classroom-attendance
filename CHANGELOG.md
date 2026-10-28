@@ -2,6 +2,15 @@
 
 版號採語意化版本。Versions follow semantic versioning.
 
+## v1.0.4 — 2026-10-29
+
+- 老師主頁最下面顯示版號，回報問題時對得上是哪一版；新增測試，檢查版號和這份 CHANGELOG 最上面那一版一致。
+  The teacher's home page shows the version at the bottom, so a bug report can say which release it is about; a new test checks that it matches the top entry of this CHANGELOG.
+- Docker 映像改成可重現的建置：基底映像釘 digest，套件改裝新的 `requirements.lock`（完整相依、附雜湊，版本與測試用的一致）。快速開始也改用這份鎖檔安裝。
+  Reproducible Docker build: the base image is pinned by digest and packages come from the new `requirements.lock` (every dependency, with hashes, at the versions the tests use). The quick start installs from the same lock.
+- 新增行為準則（Contributor Covenant 3.0）、issue 表單（回報問題、建議）、pull request 範本與 Dependabot（GitHub Actions）；CI 用到的 Actions 改釘在 commit SHA。
+  Added a code of conduct (Contributor Covenant 3.0), issue forms (bug report, suggestion), a pull request template and Dependabot for GitHub Actions; the Actions used in CI are pinned to commit SHAs.
+
 ## v1.0.3 — 2026-10-28
 
 只修測試，程式行為不變。Tests only; behaviour is unchanged.

@@ -1,0 +1,61 @@
+name: Bug report / 回報問題
+description: Something in the attendance system does not work as described. 點名系統的行為和說明不一樣。
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Replace real student IDs, names and IP addresses with invented ones (for example `9994A001`) before posting.
+        A way to sign in for someone else or to read another student's data is a security problem: use the Security tab, not an issue.
+        貼出來之前，請把真實學號、姓名與 IP 換成虛構的，例如 `9994A001`。能替別人簽到或讀到別人資料的方法屬於安全性問題，請從 Security 分頁私下回報，不要開 issue。
+  - type: input
+    id: version
+    attributes:
+      label: Version / 版本
+      description: Shown at the bottom of the teacher's home page, or `git describe --tags` in your clone. 老師主頁最下面的版號，或在 clone 的資料夾跑 `git describe --tags`。
+      placeholder: v1.0.4
+    validations:
+      required: true
+  - type: dropdown
+    id: side
+    attributes:
+      label: Where it happened / 在哪一端
+      options:
+        - Teacher pages / 老師端
+        - Student sign-in / 學生簽到
+        - Projector page / 投影頁
+        - Deployment or manage.py / 部署或 manage.py
+    validations:
+      required: true
+  - type: input
+    id: device
+    attributes:
+      label: Phone or computer, and browser / 裝置與瀏覽器
+      description: Include in-app browsers such as LINE if the page was opened there. 從 LINE 等 App 裡開的也請寫明。
+      placeholder: iPhone 15, iOS 18, Safari
+  - type: textarea
+    id: steps
+    attributes:
+      label: What you did and what happened / 做了什麼、發生了什麼
+      description: Step by step, with the exact message on the screen. 一步一步寫，畫面上的訊息照抄。
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: What you expected / 預期的結果
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: Server log / 伺服器日誌
+      description: If you run your own instance, the lines from that moment (`docker compose logs`). 自己架站的話，附上當下的日誌。
+      render: text
+  - type: checkboxes
+    id: privacy
+    attributes:
+      label: Privacy / 隱私
+      options:
+        - label: What I pasted contains no real student IDs, names or IP addresses. 貼上的內容沒有真實學號、姓名或 IP。
+          required: true
