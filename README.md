@@ -158,7 +158,7 @@ Nothing in this repository is real student data. Test fixtures use invented IDs 
 Besides Python 3.12 and `python3-venv` from the quick start, the test gate needs:
 
 - [uv](https://docs.astral.sh/uv/getting-started/installation/), to install the pinned tool versions.
-- `curl`. `tests/gate.sh` polls `/healthz` with it before each server-backed layer. If it is missing, the gate stops before the first layer and says so (up to v1.0.0 every such layer failed with `伺服器啟動失敗`, server failed to start, although the server was running). Minimal Ubuntu images do not include it: `sudo apt install curl`.
+- `curl`. `tests/gate.sh` polls `/healthz` with it before each server-backed layer. If it is missing, the gate stops before the first layer and says so. Minimal Ubuntu images do not include it: `sudo apt install curl`.
 - For `--full` only, the `sqlite3` command-line tool (`sudo apt install sqlite3`), used by the load layer.
 
 ```bash
@@ -168,7 +168,7 @@ tests/gate.sh --quick     # nine layers, about six minutes on a 4-core cloud VM
 tests/gate.sh --full      # adds real-clock timing, load, classroom rehearsal, flakiness
 ```
 
-- If `.venv` already exists from the quick start, run only the `uv pip install` part. Current uv (0.12) stops with `A virtual environment already exists at: .venv`, and because the line is chained with `&&`, nothing gets installed. `uv venv --clear .venv` replaces the environment if that is what you want.
+- If `.venv` already exists from the quick start, run only the `uv pip install` part. Recent versions of uv refuse to overwrite an existing environment, and because the line is chained with `&&`, nothing would get installed. `uv venv --clear .venv` replaces the environment if that is what you want.
 - `--with-deps` installs WebKit's system libraries through `apt` and asks for `sudo`; on a fresh Ubuntu, WebKit does not start without them. On macOS the flag does nothing and can stay.
 - Each layer's full output goes to `/tmp/attend-gate/<layer>.log`.
 
@@ -199,6 +199,14 @@ scripts/parse_rosters.py   example registrar-export parsers
 docs/OPERATIONS.zh-TW.md   the teacher's handbook (Chinese)
 ```
 
+## Contributing
+
+Bug reports, questions and pull requests are welcome. Run `tests/gate.sh --quick` before opening a pull request; CI runs the same gate. The code is maintained in the author's working copy and published here with each release, so an accepted pull request is applied there and arrives in the next release instead of being merged directly.
+
+## Security
+
+Please do not open a public issue for a vulnerability, especially one that would let a student sign in for someone else or read other students' data. Report it privately through *Report a vulnerability* on the repository's Security tab. See [`SECURITY.md`](SECURITY.md).
+
 ## License
 
 Code is released under the [MIT License](LICENSE). Third-party notices are in [`NOTICE`](NOTICE).
@@ -207,4 +215,4 @@ Code is released under the [MIT License](LICENSE). Third-party notices are in [`
 
 ## Author
 
-Chenwei Chiang, Department of Creative Technologies and Product Design, National Taipei University of Business. Written for his own courses and used in them every week.
+Chenwei Chiang, Department of Creative Technologies and Product Design, National Taipei University of Business. Written for the author's own courses and used in them every week.

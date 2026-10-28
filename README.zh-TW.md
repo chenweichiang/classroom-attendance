@@ -91,7 +91,7 @@ docker compose build && docker compose up -d
 
 如果先在同一個目錄跑過快速開始，`-R` 不能省。少了它，`data/attend.db` 仍屬於你自己的帳號，容器（uid 10001）寫不進去；健康檢查照樣顯示 healthy，按「開始點名」卻回 500（`docker compose logs` 裡是 `sqlite3.OperationalError: attempt to write a readonly database`）。
 
-容器只聽 `127.0.0.1:3009`，以非 root 帳號執行，檔案系統唯讀，權限全數卸除。前面要有一台終結 TLS 的反向代理。以 Caddy 為例：
+容器只聽 `127.0.0.1:3009`，以非 root 帳號執行，檔案系統唯讀，並移除所有 Linux capabilities。前面要有一台負責 HTTPS 的反向代理。以 Caddy 為例：
 
 ```caddyfile
 attend.example.edu {
@@ -160,7 +160,7 @@ python manage.py delete-course --code DEMO
 除了快速開始用到的 Python 3.12 與 `python3-venv`，測試閘門還需要：
 
 - [uv](https://docs.astral.sh/uv/getting-started/installation/)，用來裝鎖定版本的工具鏈。
-- `curl`。`tests/gate.sh` 每一層要起伺服器時，都用它輪詢 `/healthz`；沒有的話，閘門會在第一層之前停下並說明缺什麼（v1.0.0 以前是每一層都顯示「伺服器啟動失敗」，但伺服器其實已經啟動）。Ubuntu 最小安裝沒有附：`sudo apt install curl`。
+- `curl`。`tests/gate.sh` 每一層要起伺服器時，都用它輪詢 `/healthz`；沒有的話，閘門會在第一層之前停下並說明缺什麼。Ubuntu 最小安裝沒有附：`sudo apt install curl`。
 - 只有 `--full` 需要：`sqlite3` 指令列工具（`sudo apt install sqlite3`），壓測層用。
 
 ```bash
@@ -170,7 +170,7 @@ tests/gate.sh --quick     # 九層，4 核雲端虛擬機約六分鐘
 tests/gate.sh --full      # 再加真實時鐘計時、壓測、教室彩排、不穩定測試偵測
 ```
 
-- 快速開始已經建過 `.venv` 的話，只跑 `uv pip install` 那段。目前的 uv（0.12）遇到既有環境會以 `A virtual environment already exists at: .venv` 結束，而這行用 `&&` 串起來，後面什麼都不會裝。確定要重建就用 `uv venv --clear .venv`。
+- 快速開始已經建過 `.venv` 的話，只跑 `uv pip install` 那段。較新版的 uv 不會覆寫既有環境，而這行用 `&&` 串起來，後面就什麼都不會裝。確定要重建就用 `uv venv --clear .venv`。
 - `--with-deps` 會透過 `apt` 裝 WebKit 需要的系統函式庫，要輸入 `sudo` 密碼；全新的 Ubuntu 少了這些，WebKit 啟動不了。macOS 上這個旗標不做任何事，留著無妨。
 - 每一層的完整輸出在 `/tmp/attend-gate/<層名>.log`。
 
@@ -200,6 +200,14 @@ tools/subset_font.py   頁面文字或名冊姓名有新字時，重做字型子
 scripts/parse_rosters.py   教務系統匯出檔的解析範例
 docs/OPERATIONS.zh-TW.md   老師的操作手冊
 ```
+
+## 參與貢獻
+
+歡迎回報問題、提問或送 pull request。送 PR 前請先跑 `tests/gate.sh --quick`，CI 跑的是同一套閘門。程式在作者的工作副本維護，每次發版時同步到這裡，所以接受的 PR 會在工作副本套用、隨下一版出現，不會直接合併。
+
+## 安全性
+
+發現漏洞請不要開公開 issue，尤其是能讓學生替別人簽到、或讀到別人資料的問題。請到 repo 的 Security 分頁按 *Report a vulnerability* 私下回報，細節見 [`SECURITY.md`](SECURITY.md)。
 
 ## 授權
 

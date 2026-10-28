@@ -2,6 +2,19 @@
 
 版號採語意化版本。Versions follow semantic versioning.
 
+## v1.0.2 — 2026-10-28
+
+只更新文件與測試，程式行為不變。Documentation and tests only; behaviour is unchanged.
+
+- 新增 `SECURITY.md`；README 補上參與貢獻與資安問題回報方式。
+  Added `SECURITY.md`; the READMEs now say how to contribute and how to report a vulnerability.
+- README 更新 uv 覆寫既有虛擬環境時的說明，拿掉已不適用的舊版附註。
+  README: updated the note on uv refusing to overwrite an existing virtual environment and dropped an outdated remark about earlier versions.
+- 移除舊的 `tests/run_all.sh`，改用 `tests/gate.sh --quick` 或 `--full`。
+  Removed the old `tests/run_all.sh`; use `tests/gate.sh --quick` or `--full`.
+- 狀態機測試修正模型：手機本場已被別的學號用過時，首次簽到不會寫入 PIN，模型改以資料庫為準。先前 `--full` 跑較多例子時可能偶發失敗。
+  State-machine test: the model now reads the database to learn whether a first sign-in stored a PIN, which it does not when the phone was already used for another student in that session. `--full` runs could previously fail intermittently.
+
 ## v1.0.1 — 2026-09-26
 
 四項修正，另新增 CI、補齊安裝文件。Four fixes, plus CI and fuller setup docs.
@@ -22,7 +35,7 @@
 ## v1.0.0 — 2026-09-21
 
 第一個公開版本，內容等同作者 2026-09-21 部署在自己課堂上的版本。
-First public release. Same code the author deployed for his own classes on 2026-09-21.
+First public release. Same code the author deployed in their own classes on 2026-09-21.
 
 - 輪換 QR（10 秒換、過期後容許 30 秒）與同步更換的六位數備援碼。
   Rotating QR (10 s interval, 30 s grace) with a six-digit fallback code.

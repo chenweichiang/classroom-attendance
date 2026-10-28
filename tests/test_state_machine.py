@@ -351,7 +351,10 @@ class AttendStateMachine(RuleBasedStateMachine):
             return
         assert r.status_code == 200, f"合法首次簽到卻失敗: {r.status_code} {r.text}"
         j = r.json()
-        self.model_pin[stu] = pin  # 手機沒有衝突時 first_time 分支會寫入這組 PIN（有衝突時不寫，見 student_has_pin）
+        if self.student_has_pin(stu):
+            # 這支手機本場若已被別的學號用過（same 衝突），do_checkin 不寫 PIN，該學號仍算「首次」；
+            # 以資料庫為準決定要不要記進模型，否則之後 rule_wrong_pin 會預期 401 卻拿到 200
+            self.model_pin[stu] = pin
         self.sync_phone_binding(stu, phone_name, phone)
         self.register_phone_use(sid, phone_name, stu, phone)
         if j.get("again"):
