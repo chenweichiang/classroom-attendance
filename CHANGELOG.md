@@ -2,6 +2,13 @@
 
 版號採語意化版本。Versions follow semantic versioning.
 
+## v1.0.5 — 2026-10-29
+
+安全性更新，請盡快更新已部署的站台。Security update; redeploy existing instances.
+
+- `python-multipart` 從 0.0.20 升到 0.0.32，修補七個已公開的弱點，其中三個是高風險（以大量或畸形的表單資料造成服務阻斷，以及非預設設定下的任意檔案寫入）。點名系統的登入、簽到與設定都經過表單解析，所以會受影響。
+  `python-multipart` goes from 0.0.20 to 0.0.32, fixing seven published vulnerabilities, three of them high severity (denial of service through large or malformed form data, and an arbitrary file write under a non-default configuration). Sign-in, check-in and settings all go through form parsing, so this system was exposed.
+
 ## v1.0.4 — 2026-10-29
 
 - 老師主頁最下面顯示版號，回報問題時對得上是哪一版；新增測試，檢查版號和這份 CHANGELOG 最上面那一版一致。
