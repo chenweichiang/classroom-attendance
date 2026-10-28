@@ -125,6 +125,7 @@ class AttendStateMachine(RuleBasedStateMachine):
         self.manual_conflict_cleared: set = set()           # 曾被 same_device 降級合法覆蓋，I4 不再強制
         self.session_phone_users: dict[tuple, set] = {}      # (sid,phone) -> 本場真的用這支手機簽過的學號集合（DB 驗證）
         self.pending_spotchecks: list[dict] = []
+        self.bind_revoked: set = set()                      # (sid,stu)：綁定場次抽點判不在、綁定被撤回
         self._spare_ctr = 0
 
     def teardown(self):
@@ -255,6 +256,16 @@ class AttendStateMachine(RuleBasedStateMachine):
             row = con.execute("SELECT pin_hash FROM students WHERE id=?", (self.pk_of[stu],)).fetchone()
         return row is not None and row["pin_hash"] is not None
 
+    def bind_revoked_here(self, sid, stu):
+        """綁定場次抽點判不在之後，這個學號本場在還沒綁上裝置前都不能再綁，do_checkin 回 403
+        （bind_revoked 檢查排在 PIN 鎖定與 bind_closed 之後、PIN 比對之前）。要在送出前算，
+        否則 app 若誤收，裝置已被綁上，事後回查就看不出來。"""
+        if sid is None or (sid, stu) not in self.bind_revoked:
+            return False
+        with self.app.db() as con:
+            row = con.execute("SELECT device_hash FROM students WHERE id=?", (self.pk_of[stu],)).fetchone()
+        return row is not None and row["device_hash"] is None
+
     def clear_me_throttle(self, phone_client):
         """/api/me 的限流桶是行程內記憶體（_checkin_hits 裡的 "me:"+device_key），
         invariant 每步都打一次，長序列會自己撞到限流。這裡清掉限流表，429 仍然算失敗。"""
@@ -342,12 +353,16 @@ class AttendStateMachine(RuleBasedStateMachine):
                 assert r.status_code == 423, f"I7 違反：已鎖定卻不是 423（do_checkin 的 PIN 鎖定檢查）: {r.status_code} {r.text}"
             return
 
+        revoked = self.bind_revoked_here(sid, stu)
         kind, r = self.attempt_checkin(phone, sid, stu, NAMES[stu], pin, pin)
         if kind in ("no_session", "no_live", "rate_limited"):
             return
         assert kind == "checkin_resp"
         if not self.allow_bind and self.kind_of(sid) != "bind":  # 綁定場次不論 allow_bind 一律允許首次綁定
             assert r.status_code == 403, f"允許首次綁定關閉，預期 403（do_checkin 的 bind_closed 檢查）: {r.status_code} {r.text}"
+            return
+        if revoked:
+            assert r.status_code == 403, f"本場抽點判不在後不能再綁，預期 403（bind_revoked）: {r.status_code} {r.text}"
             return
         assert r.status_code == 200, f"合法首次簽到卻失敗: {r.status_code} {r.text}"
         j = r.json()
@@ -427,6 +442,7 @@ class AttendStateMachine(RuleBasedStateMachine):
                 assert r.status_code == 423, f"I7 違反: {r.status_code} {r.text}"
             return
 
+        revoked = self.bind_revoked_here(sid, stu)
         kind, r = self.attempt_checkin(phone, sid, stu, NAMES[stu], wrong, wrong)
         if kind in ("no_session", "no_live", "rate_limited"):
             return
@@ -436,6 +452,9 @@ class AttendStateMachine(RuleBasedStateMachine):
             # 關閉會直接 403，不會走到 PIN 比對（do_checkin 的 bind_closed 檢查在前）。
             # 綁定場次不論 allow_bind 一律允許首次綁定，不受這個閘門擋
             assert r.status_code == 403, f"未綁裝置＋allow_bind 關閉應 403: {r.status_code} {r.text}"
+            return
+        if revoked:
+            assert r.status_code == 403, f"本場抽點判不在後不能再綁，預期 403（bind_revoked）: {r.status_code} {r.text}"
             return
         assert r.status_code == 401, f"錯 PIN 應 401（do_checkin 的 PIN 比對）: {r.status_code} {r.text}"
         self.bump_fail(sid, stu, phone_name)
@@ -467,6 +486,7 @@ class AttendStateMachine(RuleBasedStateMachine):
         # 借用前 B 本場是否已有一列：有的話 do_checkin 走 already 早返、沿用那一列的狀態，
         # 回傳的狀態不是這次判出來的，這種情況不斷言 I5（由檔尾的獨立測試鎖住）。
         pre_existing = sid is not None and self.existing_checkin(sid, b) is not None
+        revoked = self.bind_revoked_here(sid, b)
 
         kind, r = self.attempt_checkin(phone, sid, b, NAMES[b], pin, pin)
         if kind in ("no_session", "no_live", "rate_limited"):
@@ -483,6 +503,9 @@ class AttendStateMachine(RuleBasedStateMachine):
         gate_active = (not b_registered) or (not b_bound)
         if gate_active and not self.allow_bind and self.kind_of(sid) != "bind":  # 綁定場次不受這個閘門擋
             assert r.status_code == 403, f"allow_bind 關閉時應 403: {r.status_code} {r.text}"
+            return
+        if revoked:
+            assert r.status_code == 403, f"本場抽點判不在後不能再綁，預期 403（bind_revoked）: {r.status_code} {r.text}"
             return
 
         assert r.status_code == 200, f"預期借手機仍應收單: {r.status_code} {r.text}"
@@ -523,6 +546,7 @@ class AttendStateMachine(RuleBasedStateMachine):
                 assert r.status_code == 423, f"I7 違反: {r.status_code} {r.text}"
             return
 
+        revoked = self.bind_revoked_here(sid, stu)
         kind, r = self.attempt_checkin(phone, sid, stu, NAMES[stu], pin, pin)
         if kind in ("no_session", "no_live", "rate_limited"):
             return
@@ -535,6 +559,9 @@ class AttendStateMachine(RuleBasedStateMachine):
         # 老師已解除綁定（或從未綁定過）：全新手機、無衝突，應成功並綁上新手機
         if not self.allow_bind and self.kind_of(sid) != "bind":  # 綁定場次不受這個閘門擋
             assert r.status_code == 403, f"allow_bind 關閉時應 403: {r.status_code} {r.text}"
+            return
+        if revoked:
+            assert r.status_code == 403, f"本場抽點判不在後不能再綁，預期 403（bind_revoked）: {r.status_code} {r.text}"
             return
         assert r.status_code == 200, f"解除綁定後換新手機應成功: {r.status_code} {r.text}"
         self.clear_fail(sid, stu, new_phone_name)  # 非首次分支 PIN 比對通過後會清掉這支裝置的 pin_fail
@@ -655,6 +682,7 @@ class AttendStateMachine(RuleBasedStateMachine):
             # 會以為這支手機還是這個學生的。
             if self.kind_of(item["sid"]) == "bind":
                 assert r.json().get("unbound") is True, f"綁定場次抽點不在場應回 unbound: {r.text}"
+                self.bind_revoked.add((item["sid"], item["stu"]))
                 old_phone = self.phone_of[item["stu"]]
                 if old_phone is not None:
                     self.owner_of_phone.pop(old_phone, None)

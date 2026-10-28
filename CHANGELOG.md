@@ -2,6 +2,13 @@
 
 版號採語意化版本。Versions follow semantic versioning.
 
+## v1.0.3 — 2026-10-28
+
+只修測試，程式行為不變。Tests only; behaviour is unchanged.
+
+- 狀態機測試補上一條規則：綁定場次抽點判不在、綁定被撤回後，這個學號本場不能再綁定（回 403）。模型先前不知道這條，CI 隨機抽到這個順序時會失敗，縮小範例又撞上逾時，最後顯示成 Hypothesis 的 `FlakyStrategyDefinition`。
+  State-machine test: the model now knows that once a spot check in a binding session marks a student absent and revokes the binding, that student cannot bind again in the same session (403). Without this, CI failed whenever the random run reached that sequence; shrinking then hit the time limit and the failure surfaced as a Hypothesis `FlakyStrategyDefinition` error.
+
 ## v1.0.2 — 2026-10-28
 
 只更新文件與測試，程式行為不變。Documentation and tests only; behaviour is unchanged.
