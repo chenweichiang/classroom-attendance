@@ -203,7 +203,7 @@ docs/OPERATIONS.zh-TW.md   老師的操作手冊
 
 ## 參與貢獻
 
-歡迎回報問題、提問或送 pull request。送 PR 前請先跑 `tests/gate.sh --quick`，CI 跑的是同一套閘門。程式在作者的工作副本維護，每次發版時同步到這裡，所以接受的 PR 會在工作副本套用、隨下一版出現，不會直接合併。
+歡迎回報問題、提問或送 pull request。送 PR 前請先跑 `tests/gate.sh --quick`，CI 跑的是同一套閘門。程式在作者的工作副本維護，每次發版時同步到這裡，所以接受的 PR 會在工作副本套用、隨下一版出現，不會直接合併。細節見 [`CONTRIBUTING.md`](CONTRIBUTING.md)。
 
 ## 安全性
 

@@ -201,7 +201,7 @@ docs/OPERATIONS.zh-TW.md   the teacher's handbook (Chinese)
 
 ## Contributing
 
-Bug reports, questions and pull requests are welcome. Run `tests/gate.sh --quick` before opening a pull request; CI runs the same gate. The code is maintained in the author's working copy and published here with each release, so an accepted pull request is applied there and arrives in the next release instead of being merged directly.
+Bug reports, questions and pull requests are welcome. Run `tests/gate.sh --quick` before opening a pull request; CI runs the same gate. The code is maintained in the author's working copy and published here with each release, so an accepted pull request is applied there and arrives in the next release instead of being merged directly. Details are in [`CONTRIBUTING.md`](CONTRIBUTING.md).
 
 ## Security
 
