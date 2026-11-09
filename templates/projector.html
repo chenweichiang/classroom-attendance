@@ -1,16 +1,35 @@
 {% extends "base.html" %}{% block title %}{{ c.name }}｜點名{% endblock %}
 {% block head %}
+<script>(function(){
+  // 看門狗——主腳本被截斷（連 <script> 都沒送到）時，畫面要說清楚而不是永遠停在「— / —」。
+  // 這一段不可依賴後面任何元素或函式，程式碼越短越好；window.__projOk 由主腳本第一次取碼成功時設定。
+  setTimeout(function(){
+    if(window.__projOk)return;
+    function ins(){
+      var d=document.createElement('div');
+      d.id='__projWatchdog';
+      d.style.cssText='position:fixed;inset:0;z-index:999;background:#fff;display:flex;align-items:center;justify-content:center;text-align:center;padding:5vw;font:400 clamp(20px,4vh,40px)/1.4 sans-serif';
+      d.textContent='投影頁沒有完整載入（多半是網路問題）。請重新整理一次；還是不行就先改用紙本或口頭點名，補登方法看點名頁。';
+      document.body.insertBefore(d, document.body.firstChild);
+    }
+    if(document.body)ins();else document.addEventListener('DOMContentLoaded', ins);
+  }, 6000);
+})();</script>
 <style>
 body{background:#fff;padding:0;height:100vh;overflow:hidden}
 .wrap{max-width:none;height:100vh;display:grid;grid-template-rows:auto 1fr auto;padding:14px 28px}
 .top{display:flex;justify-content:space-between;align-items:baseline;gap:24px;border-bottom:2px solid var(--ink);padding-bottom:6px}
 .top .n{white-space:nowrap;flex:none}
-#netmsg{position:fixed;inset:0;display:none;align-items:center;justify-content:center;font:400 clamp(28px,5vh,60px)/1.3 var(--display);background:rgba(255,255,255,.92);text-align:center;padding:5vw}
+#netmsg{position:fixed;inset:0;display:none;flex-direction:column;align-items:center;justify-content:center;font:400 clamp(28px,5vh,60px)/1.3 var(--display);background:rgba(255,255,255,.92);text-align:center;padding:5vw;z-index:8}
+/* flex 容器裡的 <br> 不換行，要 column 才會標題在上、說明在下 */
+/* QR 仍有效時，網路訊息只是不擋 QR 的邊條（貼在畫面上緣），不整片覆蓋；過了 staleAt 才恢復整片覆蓋（上面那條預設樣式） */
+#netmsg.edge{inset:0 0 auto 0;align-items:center;justify-content:center;background:var(--red);color:#fff;font:1rem/1.5 var(--body);padding:10px 16px;text-align:center}
+#netmsg.edge small{display:block;color:#fff;font:.85rem/1.4 var(--body);margin-top:4px}
 .top .t{font:400 clamp(18px,2.6vh,30px)/1.2 var(--display)}
 .top .n{font:clamp(18px,2.8vh,32px)/1 var(--mono);letter-spacing:.04em}
 .mid{display:grid;grid-template-columns:auto auto;justify-content:center;gap:clamp(12px,3vw,48px);align-items:center;min-height:0}
-{# QR 邊長吃滿短邊的九成（保證 ≥85% 短邊，不管長寬比），六位數欄位寬度另外用 vw 上限夾住，
-   碼本身允許換行，否則 1024×768 這類窄螢幕並排時會把 QR 擠小 #}
+/* QR 邊長吃滿短邊的九成（保證 ≥85% 短邊，不管長寬比），六位數欄位寬度另外用 vw 上限夾住，
+   碼本身允許換行（不再 nowrap）——否則窄螢幕（如 1024×768）並排會把 QR 擠小，這是實測 1024×768 才會踩到的坑 */
 #qr{width:min(90vmin,calc(100vh - 100px));aspect-ratio:1}
 /* 上限再用中間那一列的實際高度夾住：768 高的投影機上 90vmin 會比中間列高 10px，QR 底部被下方資訊列壓到 */
 .mid{container-type:size}
@@ -28,16 +47,27 @@ body{background:#fff;padding:0;height:100vh;overflow:hidden}
 .big-msg{position:fixed;inset:0;display:none;flex-direction:column;gap:24px;align-items:center;justify-content:center;font:400 clamp(48px,9vh,110px)/1 var(--display);background:var(--paper);z-index:5}
 .big-msg small{font:clamp(16px,2.4vh,24px)/1.4 var(--body);color:var(--muted)}
 .closed .big-msg{display:flex}
-{# 畫面卡在過期那格時的遮罩，只用既有紅/紙/墨色，不加新色 #}
+/* 畫面卡在過期那格的遮罩，只用既有紅/紙/墨色，不加新色 */
 #stalemsg{position:fixed;inset:0;display:none;flex-direction:column;gap:20px;align-items:center;justify-content:center;font:400 clamp(28px,5.5vh,64px)/1.4 var(--display);background:var(--paper);text-align:center;padding:6vw;z-index:6}
 #stalemsg .k{color:var(--red)}
 .stale #stalemsg{display:flex}
 .stale .mid,.stale .bot{visibility:hidden}
-{# 老師登入失效時不導頁，改用全螢幕文字提示 #}
-#authmsg{position:fixed;inset:0;display:none;flex-direction:column;gap:20px;align-items:center;justify-content:center;font:400 clamp(28px,5.5vh,64px)/1.4 var(--display);background:var(--paper);text-align:center;padding:6vw;z-index:7}
+/* token 失效不導頁，全螢幕文字提示 */
+/* z-index 要蓋過 #netmsg（8）——401 是登入問題不是網路問題，兩層同時疊著時登入遮罩要在最上面 */
+#authmsg{position:fixed;inset:0;display:none;flex-direction:column;gap:20px;align-items:center;justify-content:center;font:400 clamp(28px,5.5vh,64px)/1.4 var(--display);background:var(--paper);text-align:center;padding:6vw;z-index:9}
 .authexpired #authmsg{display:flex}
 .authexpired .mid,.authexpired .bot,.authexpired .top{visibility:hidden}
 #bindLabel{color:var(--red);font:400 clamp(14px,1.8vh,22px)/1.3 var(--body)}
+/* 手機直立開投影頁（例如老師拿手機當備用投影）——QR 跟六位數並排（.mid 的
+   grid-template-columns:auto auto）在窄直立螢幕上會超寬。改上下排、QR 寬度用 vw 夾住不超過
+   可視寬，六位數用 vw 縮到整組（含中間空格）放得進去。只在窄直立螢幕生效，橫向投影幕
+   （1280×720、1920×1080 這類）不吃這條，版面不變。 */
+@media (max-width:700px) and (orientation:portrait){
+  .mid{grid-template-columns:1fr;grid-template-rows:auto auto;justify-items:center;gap:16px}
+  #qr{width:min(78vw,50vh);aspect-ratio:1}
+  .side{width:100%}
+  #code{font-size:11vw;white-space:nowrap;word-spacing:.3em;letter-spacing:.02em}
+}
 </style>
 {% endblock %}
 {% block body %}
@@ -46,23 +76,43 @@ body{background:#fff;padding:0;height:100vh;overflow:hidden}
 <div id="qr"></div>
 <div class="side"><div class="k">掃不到就輸六位數</div><div id="code">······</div><div id="remain"></div><div class="url">{{ BASE_HOST }}/c</div></div>
 </div>
-<div class="bot"><span id="phase"></span><span class="k" id="every">QR 會定時更換</span></div>
+<div class="bot"><span id="phase">連線中…</span><span class="k" id="every">QR 會定時更換</span></div>
 <div class="big-msg" id="msg">點名已結束<small>還沒簽到的同學請直接找老師</small></div>
-<div id="netmsg">連線中斷，投影幕上的 QR 可能已失效<br><small style="font:1rem var(--body)">請重新整理這一頁</small></div>
+<div id="netmsg"></div>
 <div id="stalemsg"><span class="k">畫面沒有更新，請老師點一下這個分頁或重新整理</span></div>
 <div id="authmsg"><span class="k">登入已失效，請老師在這台電腦重新登入</span></div>
 <script>
-const sid={{ s.id }};let lastCode='',fails=0,staleAt=0,inFlight=false,pollTimer=null;
-fetch('/api/t/session/'+sid+'/teacher-ip',{method:'POST'}).catch(()=>{});
+const sid={{ s.id }};
+// 主腳本一開始跑就解除看門狗。看門狗只管「頁面沒載完、主腳本根本沒執行」；主腳本在跑、只是取碼
+// 卡住時，交給網路訊息說「不用重新整理」，不能被看門狗的「請重新整理」蓋掉
+window.__projOk=true;
+// 主腳本一跑就把已經插入的看門狗拆掉，不用等第一次取碼成功——取碼本身若卡住（例如網路
+// 掛了但主腳本其實有跑），沒有這行的話看門狗會一直留著，跟網路訊息同時出現、說法互相矛盾。
+(function(){var __wd0=document.getElementById('__projWatchdog');if(__wd0)__wd0.remove();})();
+// 用 var（不是 let）宣告成模組層可測狀態——頂層 var 會掛在 window 上，測試才能觀察/操作。
+var lastCode='',fails=0,staleAt=0,inFlight=false,pollTimer=null,hadSuccess=false,failSince=0,teacherIpOk=false,lastTickFailed=false,ipInFlight=false,redirecting=false,lastOpenedAt=null;
 
-{# AbortSignal.timeout 是 2022 年後才普及的 API，沒有時退回 AbortController，免得整支請求悄悄不發 #}
+// teacher-ip 送出失敗或逾時就記下來，之後每次取碼成功時補送一次，直到收到 200 或 409（已記錄）為止。
+// 上游卡住時每次取碼成功都會再補送一次，沒有逾時、也沒有「上一次還沒回來」的旗標，卡住的
+// POST 會越疊越多（實測 20 秒內送出 25 次、全部掛著），可能把 HTTP/1.1 同主機
+// 只有的 6 條連線擠掉，連取碼本身都被卡住。加 ipInFlight 旗標＋4 秒逾時，同一時間最多一個在飛。
+function sendTeacherIp(){
+  if(ipInFlight)return;
+  ipInFlight=true;
+  fetch('/api/t/session/'+sid+'/teacher-ip',{method:'POST',signal:timeoutSignal(4000)}).then(function(r){
+    if(r.status===200||r.status===409)teacherIpOk=true;
+  }).catch(function(){}).finally(function(){ipInFlight=false});
+}
+sendTeacherIp();
+
+// AbortSignal.timeout 是 2022 年後才普及的 API，沒有時退回 AbortController，別讓整支請求悄悄不發
 function timeoutSignal(ms){
   if(typeof AbortSignal!=='undefined'&&typeof AbortSignal.timeout==='function')return AbortSignal.timeout(ms);
   const ac=new AbortController();setTimeout(()=>ac.abort(),ms);return ac.signal;
 }
 
 
-{# Wake Lock 拿不到就默默放棄，不能因此擋畫面 #}
+// Wake Lock 失敗要默默放棄，不能因此擋畫面
 let wakeLock=null;
 async function requestWakeLock(){
   try{
@@ -71,16 +121,47 @@ async function requestWakeLock(){
 }
 requestWakeLock();
 
+// 遮罩文案——第一行連不到伺服器，第二行不用重新整理，並顯示已經連不上多少秒
+// QR 仍有效（staleAt 之前）時只是不擋 QR 的邊條；過了 staleAt 才整片蓋住
+function showNetOverlay(){
+  const el=document.getElementById('netmsg');
+  const secs=failSince?Math.floor((performance.now()-failSince)/1000):0;
+  // 還沒成功取碼過（畫面上根本沒有 QR）也整片顯示，教室後面才看得到
+  const full=!hadSuccess||!!(staleAt&&performance.now()>staleAt);
+  el.classList.toggle('edge', !full);
+  el.innerHTML='連不到伺服器，可能是網路問題<br><small>這一頁會自己一直重試，不用重新整理。超過一分鐘還連不上，請先改用紙本或口頭點名，補登方法看點名頁。（已 '+secs+' 秒）</small>';
+  el.style.display='flex';
+}
+function hideNetOverlay(){
+  const el=document.getElementById('netmsg');
+  el.style.display='none';
+  el.classList.remove('edge');
+}
+
 async function tick(){
   if(inFlight)return;
   inFlight=true;
   try{
     const r=await fetch('/api/t/session/'+sid+'/qr?have='+encodeURIComponent(lastCode),{cache:'no-store',signal:timeoutSignal(4000)});
-    if(r.status===401){document.body.classList.add('authexpired');inFlight=false;return}
+    if(r.status===401){
+      // 登入失效不是網路問題，網路訊息（連不到伺服器）跟登入遮罩同時疊在畫面上會誤導；
+      // 收掉網路訊息、把失敗計數歸零重新開始算，登入遮罩自己的 z-index 要蓋過網路訊息（見 CSS）。
+      document.body.classList.add('authexpired');hideNetOverlay();fails=0;failSince=0;lastTickFailed=false;
+      inFlight=false;return
+    }
     if(r.status===404){document.getElementById('msg').innerHTML='這次點名已被刪除';document.body.classList.add('closed');inFlight=false;return}
-    const d=await r.json();fails=0;document.getElementById('netmsg').style.display='none';
+    const d=await r.json();
+    fails=0;failSince=0;lastTickFailed=false;hadSuccess=true;
+    // 顯示過「登入已失效」遮罩之後，老師在同一台電腦重新登入、下一次取碼回 200 就該把
+    // 遮罩拿掉——不然畫面卡在 authexpired，即使已經重新登入成功也看不到 QR。
+    document.body.classList.remove('authexpired');
+    // 主腳本第一次取碼成功，收掉看門狗（若已插入）
+    window.__projOk=true;
+    const wd=document.getElementById('__projWatchdog'); if(wd)wd.remove();
+    hideNetOverlay();
     document.body.classList.remove('stale');
-    staleAt=performance.now()+Math.max(0,d.remain)*1000+d.interval*1000;
+    // staleAt＝這張 QR 的換碼時間點（now+remain）＋grace，也就是伺服器真的不收這組碼的時刻
+    staleAt=performance.now()+Math.max(0,d.remain)*1000+d.grace*1000;
     document.getElementById('count').textContent=d.n_ok+' / '+d.total;
     document.getElementById('bindLabel').style.display=d.kind==='bind'?'':'none';
     document.getElementById('every').textContent='QR 每 '+d.interval+' 秒換一次';
@@ -88,18 +169,49 @@ async function tick(){
     document.getElementById('code').textContent=d.code.slice(0,3)+' '+d.code.slice(3);
     if(d.svg&&d.code!==lastCode){document.getElementById('qr').innerHTML=d.svg;lastCode=d.code}
     const left=Math.max(0,Math.ceil((d.open_until-d.now)/60)), lateLeft=Math.max(0,Math.ceil((d.late_until-d.now)/60));
-    {# 綁定場次沒有遲到區，狀態列標「綁定中，剩 N 分鐘」 #}
+    // 綁定場次沒有遲到區，狀態列改標「綁定中，剩 N 分鐘」
     document.getElementById('phase').textContent= d.kind==='bind'&&d.phase!=='closed'?('綁定中，剩 '+left+' 分鐘')
       : d.phase==='open'?('簽到中，出席窗剩 '+left+' 分鐘'): d.phase==='late'?('已進入遲到區，剩 '+lateLeft+' 分鐘'):'點名已結束';
     document.body.classList.toggle('closed', d.phase==='closed');
-    if(d.phase==='closed')staleAt=0;
-  }catch(e){if(++fails>=3)document.getElementById('netmsg').style.display='flex'}
+    if(d.phase==='closed'){
+      staleAt=0;
+      // 綁定場次結束、老師另開一般點名後，舊投影分頁不再只講「點名已結束」——同一門課
+      // 已經有新的一場在進行時，3 秒後自動切過去，不必等老師發現分頁沒動而手動重開。
+      if(d.next_sid&&!redirecting){
+        redirecting=true;
+        document.getElementById('msg').innerHTML='這門課已經開了新的一場，3 秒後自動切換';
+        setTimeout(function(){location.href='/t/projector/'+d.next_sid;},3000);
+      }
+    }
+    // 「刪除此次」後重開沿用同一個場次號，伺服器上是一場全新的場次（沒有教室 IP）；opened_at 變了就重送
+    if(d.opened_at!==undefined){
+      // 同一個場次號被重開（可能是另一門課）：頁面上的課名、標題都是舊的，整頁重新載入（載入時會重送教室 IP）
+      if(lastOpenedAt!==null&&d.opened_at!==lastOpenedAt){location.reload();return}
+      lastOpenedAt=d.opened_at;
+    }
+    if(!teacherIpOk)sendTeacherIp();  // 還沒補送成功，取碼成功時再試一次
+  }catch(e){
+    // 還沒成功過就失敗一次即顯示；已經成功過之後維持連續 3 次失敗才顯示
+    fails++;
+    lastTickFailed=true;
+    if(!failSince)failSince=performance.now();
+    // 畫面凍結時顯示的「畫面沒有更新」（#stalemsg）是猜測性的——可能只是分頁被瀏覽器
+    // 節流，不一定真的斷線；一旦取碼真的失敗，就確定是網路問題，改用講得清楚的網路訊息蓋過去，
+    // 不必等到累積 3 次失敗的門檻（那個門檻是給「還沒顯示過任何訊息」的情況用的）。
+    if(document.body.classList.contains('stale')){
+      document.body.classList.remove('stale');
+      showNetOverlay();
+    }else if(!hadSuccess||fails>=3){
+      showNetOverlay();
+    }
+  }
   inFlight=false;
 }
 
-{# 本地時鐘自我檢查：不管輪詢本身是否被節流，只要這段程式碼有機會執行就會發現卡格 #}
+// 本地時鐘自我檢查，不管輪詢本身是否被節流，只要這段程式碼有機會執行就會發現卡格；
+// 最近一次取碼是失敗（網路問題）時不算「畫面凍結」，只顯示網路訊息，不疊加 #stalemsg
 function checkStale(){
-  if(staleAt&&performance.now()>staleAt&&!document.body.classList.contains('closed')){
+  if(staleAt&&performance.now()>staleAt&&!lastTickFailed&&!document.body.classList.contains('closed')){
     document.body.classList.add('stale');
   }
 }
@@ -115,6 +227,11 @@ document.addEventListener('visibilitychange',function(){
     requestWakeLock();
   }
 });
+
+// 網路訊息顯示中就每秒重算「已 N 秒」與整片／邊條；取碼卡住時一輪要等 4 秒逾時，不能靠 tick 更新
+setInterval(function(){
+  if(failSince&&document.getElementById('netmsg').style.display==='flex')showNetOverlay();
+},1000);
 
 (async()=>{await tick();checkStale();scheduleNext();})();
 </script>

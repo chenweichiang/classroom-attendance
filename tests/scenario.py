@@ -1,9 +1,12 @@
 """整體情境回歸測試：三門課交錯、跨課同學生同手機、多週、延長、自動結案、解綁重綁、併發、四方對帳。
-跑法（在 repo 根目錄）：.venv/bin/python tests/scenario.py   （需要 httpx：uv pip install -p .venv/bin/python httpx）
-用獨立的 /tmp 資料庫，不碰正式資料。全部通過會印「全部通過」，否則列出失敗項並以非零離開。"""
-import os, sys, threading, csv, io
-os.environ.update(ATTEND_SECRET="scen", ATTEND_TEACHER_PASSWORD="pw", ATTEND_DB="/tmp/attend-scen.db", ATTEND_BASE_URL="http://test")
-for f in ("/tmp/attend-scen.db", "/tmp/attend-scen.db-wal", "/tmp/attend-scen.db-shm"):
+跑法（在專案根目錄）：.venv/bin/python tests/scenario.py   （需要 httpx：uv pip install -p .venv/bin/python httpx）
+用獨立的暫存資料庫（ATTEND_SCEN_DB，沒給就 mkdtemp），不碰正式資料。全部通過會印「全部通過」，否則列出失敗項並以非零離開。"""
+import os, sys, threading, csv, io, tempfile
+# 資料庫路徑由 ATTEND_SCEN_DB 指定（gate.sh 傳 $LOGDIR 底下的唯一路徑）；沒給就用 mkdtemp，不落回固定的 /tmp 檔名，
+# 免得兩個閘門同時跑互踩同一個庫
+_SCEN_DB = os.environ.get("ATTEND_SCEN_DB") or os.path.join(tempfile.mkdtemp(prefix="attend-scen-"), "scen.db")
+os.environ.update(ATTEND_SECRET="scen", ATTEND_TEACHER_PASSWORD="pw", ATTEND_DB=_SCEN_DB, ATTEND_BASE_URL="http://test")
+for f in (_SCEN_DB, _SCEN_DB + "-wal", _SCEN_DB + "-shm"):
     try: os.remove(f)
     except FileNotFoundError: pass
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -46,7 +49,11 @@ def grant(sid, client=None):
     import re
     return re.search(r'GRANT="([^"]+)"', html).group(1)
 
-def checkin(sid, dev, stu, name="", pin="1234", pin2=None, ua="iPhone", ip="140.131.1.1", hints="h"):
+def checkin(sid, dev, stu, name="", pin="1234", pin2=None, ua=None, ip="140.131.1.1", hints="h"):
+    # 同指紋（IP＋UA＋語言）的另一個學號會被轉待確認；情境裡每支模擬手機是不同的手機，預設各給自己的 UA
+    if ua is None:
+        import hashlib
+        ua = "iPhone/" + hashlib.sha1(str(dev).encode()).hexdigest()[:8]
     c = D(dev)
     return c.post("/api/checkin", data={"grant": grant(sid, c), "student_id": stu, "name": name, "pin": pin, "pin2": pin2 if pin2 is not None else pin, "hints": hints},
                   headers={"user-agent": ua, "cf-connecting-ip": ip}).json()
@@ -64,9 +71,9 @@ j = checkin(cd1, "phoneA-0000000000000000", "9994A001", "學生1"); check(j["ok"
 j = checkin(dt1, "phoneA-0000000000000000", "9994A001", "學生1", pin="5678"); check(j["ok"] and j["first_time"], "A001 DT 用同手機首簽（各課獨立 PIN）")
 check(not row(dt1, "9994A001")["flags"] or "same_device" not in row(dt1, "9994A001")["flags"], "跨課同手機不算同裝置多人")
 j = checkin(cd1, "phoneA-0000000000000000", "9994A001"); check(j["again"], "A001 CD 再簽回原收據")
-# CD 這支手機已綁定，回簽免 PIN：即使帶的是 DT 的 PIN（甚至亂打）也成功。
-# 「各課獨立 PIN」由首綁那一刻（上面 dt1 那行）示範，回簽階段 PIN 不是判準
-j = checkin(cd1, "phoneA-0000000000000000", "9994A001", pin="5678"); check(j["ok"] and j["again"], "已綁裝置回簽免 PIN，帶錯 PIN 也成功")
+# 已綁裝置回簽免 PIN：CD 這支手機已綁定，回簽免 PIN——即使帶的是 DT 的 PIN（甚至亂打）也成功，
+# 「各課獨立 PIN」改由首綁那一刻（上面 dt1 那行）示範，回簽階段 PIN 已經不是判準
+j = checkin(cd1, "phoneA-0000000000000000", "9994A001", pin="5678"); check(j["ok"] and j["again"], "A2：已綁裝置回簽免 PIN，帶錯 PIN 也成功")
 # A002 用 A001 手機代簽
 j = checkin(cd1, "phoneA-0000000000000000", "9994A002", "學生2"); check(j["ok"] and j["status"] == "待確認", "A002 用 A001 手機 → 待確認")
 check(row(cd1, "9994A001")["status"] == "pending", "A001 也轉待確認（兩人都要看）")
@@ -117,12 +124,11 @@ T.post(f"/t/course/{cid['CD']}/settings", data={"open_minutes": 3, "late_minutes
 with A.db() as con: st_ = A.course_settings(A.get_course(con, cid["CD"]))
 check(st_["allow_bind"] is False and st_["grant_seconds"] == 180, "儲存設定不覆寫 allow_bind 與其他設定")
 cd2 = open_session("CD")
-j = checkin(cd2, "phoneC2-000000000000000", "9994A003"); check(not j["ok"] and "另一支手機" in j["error"], "A003 換手機未解綁被擋")
+j = checkin(cd2, "phoneC2-000000000000000", "9994A003"); check(j["ok"] and j.get("rebound"), f"A003 換手機用舊 PIN 自動改綁{j}")  # PIN 對就改綁；allow_bind 關也照樣（只管首次綁定）
 with A.db() as con: pk3 = con.execute("SELECT id FROM students WHERE course_id=? AND student_id='9994A003'", (cid["CD"],)).fetchone()["id"]
 T.post(f"/api/t/student/{pk3}/unbind", data={"reset_pin": ""})
-j = checkin(cd2, "phoneC2-000000000000000", "9994A003"); check(not j["ok"] and "不開放首次綁定" in j["error"], "解綁後但 allow_bind 關 → 擋")
-T.post(f"/api/t/course/{cid['CD']}/bind", data={"allow": "1"})
-j = checkin(cd2, "phoneC2-000000000000000", "9994A003"); check(j["ok"] and not j.get("first_time"), f"開放後 A003 用舊 PIN 綁新手機 {j}")
+j = checkin(cd2, "phoneC2-000000000000000", "9994A003"); check(j["ok"] and not j.get("first_time"), f"解綁當天 allow_bind 關也能用舊 PIN 綁回{j}")
+T.post(f"/api/t/course/{cid['CD']}/bind", data={"allow": "1"})  # 後面 A004 等人要首綁，打開
 check(checkin(cd2, "phoneC2-000000000000000", "9994A003")["again"], "新手機再簽回收據")
 T.post(f"/api/t/student/{pk2}/unbind", data={"reset_pin": "1"})
 j = checkin(cd2, "phoneB-0000000000000000", "9994A002", "學生2", pin="9999"); check(j["ok"] and j["first_time"], "A002 重設後當首次，新 PIN")

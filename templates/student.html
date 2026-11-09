@@ -11,6 +11,7 @@
 .pinbox{-webkit-text-security:disc;letter-spacing:.2em}
 #form{padding-bottom:60vh}
 #err{scroll-margin-top:12px}
+.notme{display:inline-block;min-width:44px;min-height:44px;line-height:44px;padding:0 12px}
 </style>{% endblock %}
 {% block body %}
 <div class="mast"><span class="k"><b>{{ c.name }}</b> · 簽到</span><nav><a href="/help">說明</a></nav></div>
@@ -18,28 +19,47 @@
 {% if closed %}
 <h1>點名已結束</h1>
 <p>有到課但沒簽到成功的，直接找老師。</p>
+<p class="muted sm">老師如果說取消結束了，重新掃投影幕上的 QR。</p>
 {% elif expired %}
 <h1>QR 已過期</h1>
 <p class="err">{{ error }}</p>
 <p><a class="btn ghost" href="/c">改輸六位數</a></p>
 <p class="muted sm">手機掃不過，不要借同學的手機，直接舉手找老師。</p>
+{% elif already_checked and not already_checked_open %}
+<h1>{% if is_bind %}這一場已經綁定了{% else %}這一場已經簽到了{% endif %}</h1>
+<p class="who">{{ name }}　{{ stu_id }}　{{ status_label }}{% if ts %}（{{ ts }}）{% endif %}</p>
+<p class="muted sm">{{ pending_note or '有疑問下課找老師' }}</p>
+{% if already_checked_expired_hint %}
+<p class="muted sm">要借這支手機幫別的同學簽到，請重新掃描投影幕上的 QR。</p>
 {% else %}
-<div id="form">
+<p class="sm"><a href="/me">看我的出缺勤</a></p>
+{% endif %}
+{% else %}
+{% if already_checked_open %}
+<div id="alreadyBanner">
+<h1>{% if is_bind %}這一場已經綁定了{% else %}這一場已經簽到了{% endif %}</h1>
+<p class="who">{{ name }}　{{ stu_id }}　{{ status_label }}{% if ts %}（{{ ts }}）{% endif %}</p>
+<p class="muted sm">{{ pending_note or '有疑問下課找老師' }}</p>
+<p class="sm"><a href="/me">看我的出缺勤</a> · <a href="#" id="borrow">不是我，要借這支手機簽到</a></p>
+</div>
+{% endif %}
+<div id="form"{% if already_checked_open %} style="display:none"{% endif %}>
 <h1 id="hd">簽到</h1>
 <p id="modeHint" class="muted sm"></p>
 <div id="firstFields">
-<label>學號</label><input id="student_id" autocapitalize="characters" autocomplete="off" inputmode="text" class="mono" maxlength="12">
-<div id="nameField"><label>姓名，中文全名</label><input id="name" autocomplete="off"></div>
-<label>PIN，四到六位數字<br>換手機時要用它證明是你，請記住，別告訴別人</label><input id="pin1" type="text" inputmode="numeric" pattern="[0-9]*" maxlength="6" autocomplete="off" class="mono pinbox">
-<div id="pin2Field"><label>再輸一次 PIN</label><input id="pin2" type="text" inputmode="numeric" pattern="[0-9]*" maxlength="6" autocomplete="off" class="mono pinbox"></div>
+<label for="student_id">學號</label><input id="student_id" autocapitalize="characters" autocomplete="off" inputmode="text" class="mono" maxlength="12">
+<div id="nameField"><label for="name">姓名，中文全名</label><input id="name" autocomplete="off"></div>
+<label for="pin1">PIN，四到六位數字<br>換手機時要用它證明是你，請記住，別告訴別人</label><input id="pin1" type="text" inputmode="numeric" pattern="[0-9]*" maxlength="6" autocomplete="off" class="mono pinbox">
+<div id="pin2Field"><label for="pin2">再輸一次 PIN</label><input id="pin2" type="text" inputmode="numeric" pattern="[0-9]*" maxlength="6" autocomplete="off" class="mono pinbox"></div>
 </div>
 <div id="returnFields" style="display:none">
-<div class="who" id="who"></div><a href="#" onclick="switchFirst();return false" class="muted sm">不是我</a>
+<div class="who" id="who"></div><a href="#" onclick="notMe();return false" class="muted sm notme">不是我</a>
 </div>
 <span id="errHome"></span>
 <p class="err" id="err" role="alert"></p>
-<p style="margin-top:28px"><button class="big" type="button" id="go" onclick="submit()">簽到</button></p>
+<p style="margin-top:28px"><button class="big" type="button" id="go" onclick="submit()" disabled>{% if via_code %}頁面還沒載完，請回上一頁重新輸入六位數{% else %}頁面還沒載完，請重新掃描 QR{% endif %}</button></p>
 <p id="countdown"></p>
+<p class="muted sm" id="reopenHint" style="display:none">老師如果說取消結束了，重新掃投影幕上的 QR。</p>
 <p class="muted sm">手機掃不過，不要借同學的手機，直接舉手找老師。</p>
 <p class="muted" style="font-size:.78rem">只記錄學號、姓名、簽到時間與連線來源，供本課程出缺勤使用，學期結束後刪除。</p>
 </div>
@@ -54,23 +74,35 @@
 {% endif %}
 </div>
 <script>
-{% if not closed and not expired %}
+window.ATTEND_SID={{ sid|default(none)|tojson }};  // 網址沒有場次號（從 /c 進表單）時，前端回報靠它帶場次
+{% if not closed and not expired and (not already_checked or already_checked_open) %}
 const GRANT="{{ grant }}", COURSE={{ c.id }}, GRANT_SECONDS={{ grant_seconds }};
+const SESSION_LEFT={{ session_left|default(0)|int }};  // 場次還剩幾秒（綁定場次的 late_until 就是結束時間）
 const DK='';  // 裝置識別由伺服器以 httponly cookie 下發，前端不再自報
-let mode='first', knownId='', pinOnly=false;
+let mode='first', knownId='', pinOnly=false, pinOnlyHint='';  // 切成只輸 PIN 前表單上打的姓名，只當提示送給伺服器
 const sidEl=document.getElementById('student_id'), nameEl=document.getElementById('name');
 const pin1El=document.getElementById('pin1'), pin2El=document.getElementById('pin2');
 const nameField=document.getElementById('nameField'), pin2Field=document.getElementById('pin2Field');
 const errEl=document.getElementById('err'), errHome=document.getElementById('errHome');
+const NETERR_TEXT='連線中斷，不確定有沒有送到。請再按一次簽到：已經簽過的話會直接顯示收據。';  // submit 兩處共用
 const goBtn=document.getElementById('go'), cdEl=document.getElementById('countdown');
 
-{# 學號欄先把全形英數轉半形再過濾，不要靜默刪掉打不進去的字 #}
+// 學號欄先把全形英數轉半形再過濾，不要靜默刪掉打不進去的字
 function toHalfwidth(s){return s.replace(/[！-～]/g,c=>String.fromCharCode(c.charCodeAt(0)-0xFEE0)).replace(/　/g,' ')}
 sidEl.addEventListener('input',()=>{sidEl.value=toHalfwidth(sidEl.value).toUpperCase().replace(/[^0-9A-Z]/g,'');saveDraft()});
+// 重打 PIN 時直接蓋掉上一次的內容（同 code.html 的 select()）；點進欄位時瀏覽器會在 mouseup 把游標放回去、把選取清掉，
+// 所以聚焦後的第一次 mouseup 擋掉，之後在欄位裡點擊照常移動游標
+let pinJustFocused=false;
+pin1El.addEventListener('focus',()=>{pin1El.select();pinJustFocused=true});
+pin1El.addEventListener('mouseup',e=>{if(pinJustFocused){e.preventDefault();pinJustFocused=false}});
+pin1El.addEventListener('blur',()=>{pinJustFocused=false});
 [pin1El,pin2El].forEach(el=>el.addEventListener('input',()=>{el.value=el.value.replace(/\D/g,'')}));
 nameEl.addEventListener('input',saveDraft);
+// 頁尾腳本只換掉「頁面還沒載完」的文字，按鈕仍維持停用——要等 init() 確認完這支手機是不是
+// 已經綁定過（whoami 回來、或兩次逾時退回首綁）才能按，不能腳本一跑完就先開放
+goBtn.textContent='確認這支手機…';
 
-{# 學號與姓名隨輸入存進 sessionStorage，換頁（410／切 App 再回來）不用重打 #}
+// 學號與姓名隨輸入存進 sessionStorage，換頁（410／切 App 再回來）不用重打
 function saveDraft(){try{sessionStorage.setItem('attend_sid',sidEl.value);sessionStorage.setItem('attend_name',nameEl.value)}catch(e){}}
 function restoreDraft(){try{
   const sid=sessionStorage.getItem('attend_sid'), nm=sessionStorage.getItem('attend_name');
@@ -79,42 +111,143 @@ function restoreDraft(){try{
 }catch(e){}}
 
 function switchFirst(){
-  mode='first';pinOnly=false;
+  mode='first';pinOnly=false;pinOnlyHint='';clearPins();  // 切回完整表單時，隱藏的 #pin2 也不能留著上一輪的值
   document.getElementById('firstFields').style.display='';nameField.style.display='';pin2Field.style.display='';
   document.getElementById('returnFields').style.display='none';
-  document.getElementById('modeHint').textContent='第一次用這支手機簽到，填學號、姓名並設 PIN，之後這支手機就綁定你的學號。';
+  // 新罐子（或忘了上次是哪個 App／瀏覽器開的）都會落到這裡，提示要叫人先想想上次是不是從
+  // LINE、IG 這類 App 裡開的，回那個 App 掃，不要在這裡重新首綁把別人的紀錄弄亂
+  document.getElementById('modeHint').textContent='這個瀏覽器還沒綁定過學號。第一次簽到：填學號、姓名並設 PIN。'
+    +'以前簽過的同學：回上次開的 App 掃（例如上次在 LINE 裡開，就回 LINE 掃），或直接在這裡填學號、姓名，PIN 兩格都填原本那組，就會改綁到這個瀏覽器。';
   restoreDraft();
+  errEl.textContent='';
+  // init() 決定好模式之後才啟用送出鈕——switchFirst() 是其中一種終局狀態
+  goBtn.disabled=false; goBtn.textContent='簽到';
 }
-{# 伺服器判定「這個學號已經設過 PIN」時，表單切成只輸 PIN（保留學號，隱藏姓名與第二個 PIN 欄） #}
-function pinOnlyMode(){
-  pinOnly=true;
-  nameField.style.display='none';pin2Field.style.display='none';
-  document.getElementById('modeHint').textContent='這個學號已經設過 PIN，請直接輸入原本的 PIN。';
-  pin1El.focus();
-}
-
-async function init(){
-  const fd=new FormData();fd.append('course_id',COURSE);
-  try{const r=await fetch('/api/whoami',{method:'POST',body:fd});const j=await r.json();
-    if(j.known){mode='return';knownId=j.student_id;document.getElementById('who').textContent=j.name+'　'+j.student_id;
-      document.getElementById('firstFields').style.display='none';document.getElementById('returnFields').style.display='';document.getElementById('modeHint').textContent='';return}
-  }catch(e){}
+// 回簽畫面的「不是我」——這支手機綁的是別人，借用別人的手機簽到會列待確認，要把話說清楚
+function notMe(){
   switchFirst();
+  document.getElementById('modeHint').textContent='這支手機綁的是別人的學號。借用別人的手機簽到會列為待確認，請下課前找老師確認；你自己的手機在身上的話，請用自己的手機掃。';
 }
-init();
+// 伺服器判定「這個學號已經設過 PIN」時，表單切成只輸 PIN（保留學號，隱藏姓名與第二個 PIN 欄）
+// PIN 欄是遮罩、maxlength=6，上一次打的內容留著，學生再打會接在後面或根本打不進去；每次要重打前一律清空
+function clearPins(){pin1El.value='';pin2El.value=''}
+// 鎖了就不能再叫人「輸對就會改用」；按鈕停用，說明換成鎖定與重設的字（submit 與 init 共用）
+function lockState(){
+  goBtn.disabled=true;goBtn.textContent='這一場請找老師';
+  document.getElementById('modeHint').textContent='這一場請找老師手動簽到。忘了 PIN 的話，請老師在名冊頁按「重設」，重設後重新掃 QR 設一組新的。';
+  clearPins();
+}
+function pinOnlyMode(){
+  pinOnly=true;clearPins();
+  nameField.style.display='none';pin2Field.style.display='none';
+  document.getElementById('modeHint').textContent='這個學號已經設過 PIN，請輸入原本的 PIN，輸對就會改用這個瀏覽器簽到。';
+  pin1El.focus();
+  // 被擋時錯誤訊息已放在 PIN 欄上方並捲到定位，接著這裡收掉姓名欄、提示變短，內容整段往上移；
+  // Safari 不支援 overflow-anchor（版面變短時不會自動保住捲動位置），錯誤訊息與 PIN 欄會一起被推出畫面頂端，所以收完版面再捲一次
+  if(errEl.textContent&&errEl.nextElementSibling===pin1El)errEl.scrollIntoView({block:'start'});
+}
 
-let left=GRANT_SECONDS,expired=false;
+// 確認這支手機是不是已綁定過時，先把首綁欄位與回簽欄位都藏起來，別讓學生在還沒確認前
+// 看到「首綁」表單就以為自己是第一次——whoami 逾時 5 秒，失敗重試一次，兩次都失敗才退回首綁表單。
+async function whoamiOnce(){
+  const fd=new FormData();fd.append('course_id',COURSE);
+  const r=await fetchWithTimeout('/api/whoami',{method:'POST',body:fd},5000);
+  try{attendFlush()}catch(e){/* 拿到回應＝網路通了，補送先前放在佇列的前端回報 */}
+  try{return await r.json()}catch(e){throw new Error('http '+r.status)}  // 回的不是 JSON（例如 502 的 HTML）：訊息帶狀態碼，回報時當場送
+}
+async function init(){
+  document.getElementById('firstFields').style.display='none';
+  document.getElementById('returnFields').style.display='none';
+  document.getElementById('modeHint').textContent='確認這支手機…';
+  let j=null, lastMsg='';
+  for(let i=0;i<2;i++){
+    try{j=await whoamiOnce();break}catch(e){lastMsg=(e&&e.message&&String(e.message).indexOf('http ')===0)?e.message:''/* 逾時或網路失敗，重試一次 */}
+  }
+  if(j&&j.known){
+    mode='return';knownId=j.student_id;document.getElementById('who').textContent=j.name+'　'+j.student_id;
+    document.getElementById('firstFields').style.display='none';document.getElementById('returnFields').style.display='';document.getElementById('modeHint').textContent='';
+    errEl.textContent='';
+    // init() 決定好模式（這裡是「known 成功」）之後才啟用送出鈕
+    goBtn.disabled=false; goBtn.textContent='簽到';
+    return;
+  }
+  if(j&&j.pin_only){
+    // 這支瀏覽器剛才對這個學號打過 PIN 被擋（重新整理、切 App 回來都會落到這裡）——直接回到只輸 PIN，學號預填
+    switchFirst();sidEl.value=j.pin_only.student_id;saveDraft();
+    pinOnlyHint=nameEl.value.trim();
+    if(j.locked){lockState()}else{pinOnlyMode()}
+    return;
+  }
+  if(j){switchFirst();return}
+  try{attendReport('whoami_fail',lastMsg)}catch(e){/* 回報失敗不能影響畫面 */}
+  switchFirst();
+  document.getElementById('modeHint').textContent='連線不穩，無法確認這支手機是否綁定過。請把下面的欄位都填完；已經綁定過的同學，PIN 兩格都填原本那組，不會被改掉。';
+}
+{% if already_checked_open %}
+// 這個模式一開始就知道這支手機綁定的是誰、也已經簽到過，不呼叫 init()——
+// 呼叫了，whoami 回來會把表單切成機主的回簽模式，蓋掉「借用」要走的首綁流程。按 #borrow 才顯示
+// 表單、進 switchFirst()，倒數則照常從頁面載入那一刻開始算，不等按下 #borrow。
+document.getElementById('borrow').addEventListener('click', function(e){
+  e.preventDefault();
+  document.getElementById('alreadyBanner').style.display='none';
+  document.getElementById('form').style.display='';
+  switchFirst();
+  document.getElementById('modeHint').textContent='借用別人的手機簽到會列為待確認，請下課前找老師確認。';
+});
+{% else %}
+init();
+{% endif %}
+
+// 倒數改從 GRANT_SECONDS-5 起算（最少 10 秒）——吸收傳輸時間與取整的誤差，別讓畫面上還顯示
+// 有剩、伺服器其實已經 410；伺服器端的憑證時效（grant_seconds）本身不變。
+// 不用每秒 left-- 累加（背景分頁被瀏覽器凍結計時器時，回來只補跑一次，left 會嚴重失真），
+// 改記一個絕對的 deadline，每次 tick 都用 Date.now() 重新算剩餘秒數——不論計時器實際跑了幾次，
+// 只要 Date.now() 是對的，算出來的剩餘秒數就一定對。
+let deadline=Date.now()+Math.max(10,GRANT_SECONDS-5)*1000, expired=false;
+// 憑證還有效不代表場次還沒結束（遲到上限前一分鐘掃到的人，倒數卻顯示 175 秒）——另記場次的結束時間，
+// 兩者取較小的顯示。場次到點但憑證還沒到期時按鈕維持可按：老師可能剛延長，交給伺服器判斷。
+const sessDeadline=Date.now()+SESSION_LEFT*1000;
 function expireForm(){
   expired=true;
+  // 剛才是網路錯誤那句（紅字叫人「再按一次」），但表單時效已到、按鈕改成重新掃 QR，兩邊矛盾——紅字換成對得上的說法
+  if(errEl.textContent===NETERR_TEXT)errEl.textContent='剛才可能沒送到，請重新掃 QR 再按一次；已經簽過的會直接顯示收據';
   cdEl.textContent='時間到';
   goBtn.textContent='重新掃 QR 或改輸六位數';
   goBtn.disabled=false;
   goBtn.onclick=()=>{location.href='/c'};
 }
-setInterval(()=>{left--;if(expired)return;if(left>0){cdEl.textContent='請在 '+left+' 秒內送出'}else{expireForm()}},1000);
+// 點名剛結束時，倒數清空、按鈕停用並改文字「點名已結束」；hasNext 為真（老師開了新的一場）
+// 時再覆寫成跟 expireForm() 一樣的「重新掃 QR 或改輸六位數」並可以按。
+function markClosed(hasNext){
+  expired=true;
+  cdEl.textContent='';
+  goBtn.disabled=true;
+  goBtn.textContent='點名已結束';
+  // 誤按結束的救法（老師取消結束）之後，被擋的同學要自己重新掃；這句放在 #reopenHint，不會被下一次 showServerError 蓋掉
+  if(!hasNext)document.getElementById('reopenHint').style.display='';
+  if(hasNext){
+    goBtn.disabled=false;
+    goBtn.textContent='重新掃 QR 或改輸六位數';
+    goBtn.onclick=()=>{location.href='/c'};
+  }
+}
+function tickCountdown(){
+  if(expired)return;
+  const left=Math.ceil((deadline-Date.now())/1000);
+  if(left<=0){expireForm();return}
+  const sleft=Math.ceil((sessDeadline-Date.now())/1000);
+  if(sleft<=0){cdEl.textContent='點名時間到了，還沒送出的請馬上按簽到；被擋就舉手找老師'}
+  else if(sleft<left){cdEl.textContent='點名再 '+sleft+' 秒結束，請在那之前送出'}
+  else{cdEl.textContent='請在 '+left+' 秒內送出'}
+}
+setInterval(tickCountdown,1000);
+// 切 App 回來（visibilitychange 變 visible）或從瀏覽器上一頁快取回來（pageshow）都立刻重算一次，
+// 不用等下一次 setInterval 才對——這兩個時機正是「螢幕關掉又打開」最常發生的地方。
+document.addEventListener('visibilitychange',()=>{if(document.visibilityState==='visible')tickCountdown()});
+window.addEventListener('pageshow',tickCountdown);
 
-{# AbortSignal.timeout 是新式 API，舊瀏覽器（iOS 15 Safari／Samsung Internet ≤19／舊 WebView）沒有；
-   先偵測，沒有就退回 AbortController＋setTimeout，不要直接呼叫讓整個 fetch 連發都發不出去 #}
+// AbortSignal.timeout 是新式 API，舊瀏覽器（iOS 15 Safari／Samsung Internet ≤19／舊 WebView）沒有；
+// 先偵測，沒有就退回 AbortController＋setTimeout，不要直接呼叫讓整個 fetch 連發都發不出去
 function fetchWithTimeout(url, opts, ms){
   if(typeof AbortSignal!=='undefined' && typeof AbortSignal.timeout==='function'){
     return fetch(url, Object.assign({}, opts, {signal: AbortSignal.timeout(ms)}));
@@ -124,7 +257,7 @@ function fetchWithTimeout(url, opts, ms){
   return fetch(url, Object.assign({}, opts, {signal: ctrl.signal})).finally(()=>clearTimeout(timer));
 }
 
-{# 欄位級錯誤：把共用的 #err 移到該欄位上方，捲入視野，焦點移過去 #}
+// 欄位級錯誤——移動共用的 #err 到該欄位正下方，捲入視野，焦點移過去
 function showFieldError(el, msg){
   errEl.textContent=msg;
   // 放在欄位「上方」：瀏覽器會把聚焦的輸入框頂到鍵盤上緣，下方那一行正好落在鍵盤後面
@@ -144,7 +277,7 @@ function validateForm(){
     if(!/^[0-9]{4,6}$/.test(pin1El.value)){showFieldError(pin1El,'PIN 要 4 到 6 位數字');return false}
     if(!pinOnly && pin1El.value!==pin2El.value){showFieldError(pin2El,'兩次 PIN 不一樣');return false}
   }
-  {# 回簽模式（mode==='return'）這支手機已認得，不要求輸 PIN，直接放行送出 #}
+  // 回簽模式（mode==='return'）這支手機已認得，不再要求輸 PIN，直接放行送出
   return true;
 }
 
@@ -158,34 +291,88 @@ async function submit(){
     fd.append('student_id',sidEl.value);
     fd.append('name',pinOnly?'':nameEl.value);
     fd.append('pin',pin1El.value);
-    {# pinOnly 之後不帶 pin2：PIN 錯誤時，伺服器只要看到 pin2 就回「已經設過 PIN」，帶著它送第二次以後
-       反而看不到「剩 N 次」與鎖定訊息；這句訊息只該在最初那次「以為是首次」時出現一次 #}
+    // pinOnly 之後不再帶 pin2：伺服器只要看到 pin2 就會一律回「已經設過 PIN」，帶著它送第二次以後
+    // 反而看不到「剩 N 次」與鎖定訊息（這句訊息只該在最初那次「以為是首次」時出現一次）
     fd.append('pin2',pinOnly?'':pin2El.value);
-  }else{fd.append('student_id',knownId)}  {# 回簽免 PIN，pin 欄位留空由後端 Form("") 接住 #}
+    // name 照舊送空的（伺服器的名冊不符判斷靠它），另帶 name_hint 讓伺服器知道這是誰打的，同姓同字數的打錯才不會歸到同學
+    if(pinOnly && pinOnlyHint)fd.append('name_hint',pinOnlyHint);
+  }else{fd.append('student_id',knownId)}  // 回簽免 PIN，pin 欄位留空由後端 Form("") 接住
   try{
     const r=await fetchWithTimeout('/api/checkin',{method:'POST',body:fd},10000);
-    const j=await r.json().catch(()=>({ok:false,error:'伺服器忙線（HTTP '+r.status+'），請稍後再試'}));
+    try{attendFlush()}catch(e){/* 簽到有回應（不論狀態碼）＝網路通了，補送佇列 */}
+    // JSON 解析失敗（傳一半斷掉）在 5xx 時仍講「伺服器忙線」，其餘情況（含 200 但斷線）
+    // 改成跟 catch 區塊同一句，別再猜是不是伺服器忙線
+    const j=await r.json().catch(()=>{
+      try{attendReport('neterr','http '+r.status)}catch(e){/* 回報失敗不能影響畫面 */}
+      return {ok:false,error: r.status>=500
+      ? ('伺服器忙線（HTTP '+r.status+'），請稍後再試')
+      : NETERR_TEXT};
+    });
     goBtn.disabled=false;
     if(!j.ok){
-      showServerError(j.error||'失敗');
-      if(mode==='first' && (j.error||'').indexOf('已經設過 PIN')>=0)pinOnlyMode();
+      // PIN 類拒絕（被擋後要重打 PIN）用欄位上方的錯誤位置，不放在焦點欄下方被鍵盤蓋住
+      if(mode==='first'&&(r.status===401||r.status===423)&&(j.error||'').indexOf('PIN')>=0)showFieldError(pin1El,j.error);
+      else showServerError(j.error||'失敗');
+      // 只輸 PIN 模式送出、被判「名冊不符」（多半是老師剛重設過 PIN，first_time 重新判定，
+      // 這次送出的空白姓名對不上名冊）——切回完整表單，保留學號，叫學生把姓名跟兩次 PIN 都補上
+      const locked=(r.status===423)||(r.status===401&&(j.error||'').indexOf('錯太多次')>=0);
+      if(locked){
+        // 已經鎖了（423，或第三次錯回的 401「錯太多次」），不論哪個模式都不能再叫人「輸對就會改用」；
+        // 按鈕停用，提示換成鎖定說明（忘了 PIN 要請老師重設，不然下次又卡）
+        lockState();
+      }else if(pinOnly && (j.error||'').indexOf('名冊不符')>=0){
+        switchFirst();
+        errEl.textContent='請把姓名也填上，並重新設定 PIN（兩次）。如果學號打錯了，先改學號。';
+      }else if(mode==='first' && (j.error||'').indexOf('已經設過 PIN')>=0){
+        pinOnlyHint=nameEl.value.trim();
+        pinOnlyMode();
+      }else if(mode==='return' && j.error==='PIN 要 4 到 6 位數字'){
+        // 回簽模式送出時，伺服器已經不認得這個瀏覽器（別的瀏覽器改綁，或老師剛解除綁定）——
+        // 切成只輸 PIN，輸對就改綁回來；之後若老師是「重設」，會走上面的名冊不符分支切回完整表單
+        const keep=knownId;
+        switchFirst();sidEl.value=keep;pinOnlyHint='';pinOnlyMode();
+        errEl.textContent='這個瀏覽器已經不是你綁定的那一個（可能剛在別的瀏覽器改綁，或老師解除了綁定）。請輸入原本的 PIN。';
+      }
+      // 任何 PIN 類拒絕（訊息含「PIN」的 400／401／423）之後，PIN 欄清空，學生下一次從空欄位開始打；學號、姓名不動
+      if((r.status===400||r.status===401||r.status===423)&&(j.error||'').indexOf('PIN')>=0)clearPins();
+      if(r.status===410){
+        if((j.error||'').indexOf('填表時間已到')>=0){
+          // 伺服器判定時間已到（410），前端不用再等下一次倒數，直接進入逾時狀態
+          expireForm();
+        }else if(j.error==='點名已經結束。有到課但沒簽到的同學，請直接找老師。'){
+          markClosed(false);
+        }else if(j.error==='這一場已經結束，老師開了新的一場，請重新掃描投影幕上的 QR'){
+          markClosed(true);
+        }else if(j.error==='這一場已經結束。老師現在開的是只做綁定的場次，不算今天的出缺勤；有到課但沒簽到成功的，請直接找老師補登。'){
+          markClosed(false);  // 新開的是只做綁定的場次，不該叫人去掃那一場
+        }
+      }
       return;
     }
     try{sessionStorage.removeItem('attend_sid');sessionStorage.removeItem('attend_name')}catch(e){}
-    document.getElementById('form').style.display='none';document.getElementById('receipt').style.display='';
+    document.getElementById('form').style.display='none';document.getElementById('receipt').style.display='';window.scrollTo(0,0);  // 表單很長時捲在下面，200% 縮放下章會在畫面外
     const st=document.getElementById('rstamp');st.className='stamp';
-    {# 綁定場次不算出缺勤，章面字用「綁」不用「到」，待確認仍優先顯示「候」 #}
+    // 綁定場次不算出缺勤，章面字用「綁」不用「到」，待確認仍優先顯示「候」
     if(j.status==='待確認'){st.textContent='候';st.classList.add('wait')}else if(j.kind==='bind'&&(j.status==='出席'||j.status==='遲到')){st.textContent='綁'}else if(j.status==='出席'||j.status==='遲到'){st.textContent='到'}else{st.textContent=j.status[0];st.classList.add('off')}
     document.getElementById('rname').textContent=j.name;document.getElementById('rstatus').textContent=j.status;document.getElementById('rts').textContent=j.ts;document.getElementById('rseat').textContent=j.student_id;
     let note='';
-    if(j.status==='待確認') note='系統看到這支手機簽過別的學號，老師會當場確認，確認前不算出席。';
-    else if(j.kind==='bind') note='這支手機已綁定你的學號。下次上課掃碼後按一下就完成簽到。';
-    else if(j.again) note=(j.status==='出席'||j.status==='遲到')?'這次已經簽過，這是原本的紀錄。':'老師已把你這次記為「'+j.status+'」，有疑問下課找老師。';
+    if(j.pin_unchanged) note='這支手機本來就綁定你的學號，PIN 沒有變更，仍是原本那組。';
+    else if(j.status==='待確認'&&j.pending_reason==='same_fp') note='系統看到同一個網路、同一種瀏覽器剛替別的學號簽過，老師會當場確認，確認前不算出席。';
+    else if(j.rebound) note='這個瀏覽器跟你上次綁定的不同，已用 PIN 確認並改綁到這裡。iPhone 下次請用內建相機 App 掃 QR、Safari 不要開私密瀏覽，就不用再輸 PIN。'
+      +(j.kind==='bind'?' 這一場只做綁定、不算出缺勤；今天還沒簽到成功的，請找老師補登。':'');
+    // 待確認要說對原因——姓名寫法不同跟「這支手機簽過別的學號」是不一樣的情況
+    else if(j.status==='待確認') note=j.pending_reason==='name_variant'
+      ?'你填的姓名和名冊的寫法不完全一樣。請先看上面的學號和姓名是不是你本人：不是的話馬上舉手找老師（多半是學號打錯）；是的話老師會當場確認，確認前不算出席。'
+      :'系統看到這支手機簽過別的學號，老師會當場確認，確認前不算出席。';
+    else if(j.kind==='bind') note='這支手機已綁定你的學號。這一場只做綁定、不算出缺勤；今天還沒簽到成功的，請找老師補登。下次上課掃碼後按一下就完成簽到。';
+    else if(j.again) note=(j.status==='出席'||j.status==='遲到')?'這次已經簽過，這是原本的紀錄。':'老師已把你這次記為「'+j.status+'」。你人在教室的話，現在舉手讓老師改。';
     else if(j.first_time) note='這支手機已綁定你的學號，記住你的 PIN。';
     document.getElementById('rnote').textContent=note;
   }catch(e){
+    // TypeError（fetch 的網路錯誤）與其他錯誤一律同一句，不再猜是不是「瀏覽器太舊」
+    try{attendReport('neterr',(e&&e.name)||'error')}catch(e2){/* 回報失敗不能影響畫面 */}
     goBtn.disabled=false;
-    showServerError(e instanceof TypeError ? '這個瀏覽器太舊，請改用 Chrome 或 Safari 開啟，或改輸六位數' : '送不出去，檢查網路後再試一次');
+    showServerError(NETERR_TEXT);
   }
 }
 {% endif %}

@@ -4,7 +4,7 @@
 
 用法：
   ssh your-server 'sudo zcat /var/log/caddy/attend*.gz; sudo cat /var/log/caddy/attend.log /var/log/caddy/attend.log.1' \\
-    | python3 tools/log_funnel.py --date YYYY-MM-DD --from HH:MM --to HH:MM
+    | python3 tools/log_funnel.py --date 2026-09-10 --from 15:00 --to 15:45
 
 輸入：每行一個 Caddy access-log JSON 物件，用到的欄位＝ts、status、size、duration、
 request.method、request.uri、request.headers（User-Agent、Cf-Connecting-Ip）、request.client_ip。
@@ -12,15 +12,25 @@ request.method、request.uri、request.headers（User-Agent、Cf-Connecting-Ip�
   1. 匿名化時間線（IP 取 sha1 前四碼、UA 只留類別、路徑裡的簽章遮成 SIG、排除 /static／/healthz／
      Gatus／老師端輪詢）
   2. 漏斗彙總（裝置數、QR 落地 200/410、改走 /c、/api/checkin 各狀態碼、第一次落地→第一次簽到 200
-     的秒數分佈、落地成功卻沒簽到、同裝置多次簽到疑似替人簽）
-  3. 用回應大小反推錯誤原因：從同目錄上一層 app.py 抓所有 HTTPException(4xx/5xx, "字串") 建
+     的秒數分佈、落地成功卻沒簽到、送出但全被擋）
+  3. 用回應大小反推錯誤原因：從同目錄上一層 app.py 抓所有 HTTPException／Reject(4xx/5xx, "字串"…) 建
      {"ok":false,"error":"…"} 的 UTF-8 位元組長度對照表，拿日誌裡的 4xx/5xx size 回查
+
+讀這份輸出要知道的限制：
+  - 日誌只有出口 IP，沒有裝置識別。「裝置」欄＝出口 IP 的雜湊，校園 NAT 與行動網路底下的多支手機會併成一個，
+    所以這支工具不再做「同一裝置成功後又送出其他簽到（疑似替人簽）」的判斷（以 IP 當裝置不成立，只會產生假訊號）；
+    誰替誰簽以 tools/session_report.py 的旗標（same_device、proxy_for 等，來自應用程式自己的事件）為準。
+  - 老師的機器＝「UA 與出口 IP 都相同、而且打過老師端路徑（/t、/t/…、/api/t/…）」的那一組請求，只剔除這一組；
+    不再把整個出口 IP 剔除（老師在教室網路上，同一個出口後面的學生要留著算）。
+  - 「QR 落地 410」只算真的回 410 過期頁的請求；已簽到的人回到舊的 QR 分頁，伺服器回 200 收據（land_revisit），
+    不含在 410 裡。
 """
 from __future__ import annotations
 
 import argparse
 import ast
 import hashlib
+import itertools
 import json
 import re
 import sys
@@ -146,54 +156,76 @@ def read_entries(fh):
 
 # 從 app.py 反推錯誤字串對照表
 
-HTTPEXC_RE = re.compile(r"HTTPException\(\s*(\d{3})\s*,\s*(.+)\)\s*(?:#.*)?$")
+ERROR_CALL_NAMES = ("HTTPException", "Reject")  # 簽到路徑 9/26 起用 Reject(狀態碼, 訊息, 原因碼)
 
 
-def _classify_arg(status: int, arg: str, lineno: int, out: list, note: str = "") -> None:
-    arg = arg.strip()
-    if re.match(r'^f["\']', arg):
-        out.append({"status": status, "kind": "fstring", "raw": arg, "lineno": lineno, "note": note})
-        return
-    m = re.match(r'^"((?:[^"\\]|\\.)*)"$', arg) or re.match(r"^'((?:[^'\\]|\\.)*)'$", arg)
-    if m:
-        try:
-            text = ast.literal_eval(arg)
-        except (ValueError, SyntaxError):
-            out.append({"status": status, "kind": "other", "raw": arg, "lineno": lineno, "note": note})
-            return
-        out.append({"status": status, "kind": "literal", "text": text, "lineno": lineno, "note": note})
-        return
-    if re.match(r"^[A-Za-z_]\w*$", arg):
-        out.append({"status": status, "kind": "variable", "raw": arg, "lineno": lineno, "note": note})
-        return
-    out.append({"status": status, "kind": "other", "raw": arg, "lineno": lineno, "note": note})
+LEFT_VALUES = [str(n) for n in range(0, 11)]  # 「剩 {left} 次」的 left 代入 0 到 10
+
+
+def _status_label_values(tree: ast.AST) -> list[str] | None:
+    """用語法樹從 app.py 讀 STATUS_LABEL 的字典字面值（不 import app），讀不到就回 None。"""
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Assign) and isinstance(node.value, ast.Dict) \
+                and any(isinstance(t, ast.Name) and t.id == "STATUS_LABEL" for t in node.targets):
+            vals = [v.value for v in node.value.values if isinstance(v, ast.Constant) and isinstance(v.value, str)]
+            return vals if len(vals) == len(node.value.values) else None
+    return None
+
+
+def _expand_fstring(node: ast.JoinedStr, labels: list[str] | None) -> list[str] | None:
+    """f-string 的運算式只有兩種時展開成多個字面值——名稱 left（0 到 10）、對 STATUS_LABEL 取下標（它的每個值）；
+    有兩個可展開欄位就做笛卡兒積。其餘（別的運算式、格式化規格）回 None，呼叫端照舊寫進略過清單。"""
+    pools: list[list[str]] = []
+    for part in node.values:
+        if isinstance(part, ast.Constant):
+            pools.append([str(part.value)])
+        elif isinstance(part, ast.FormattedValue) and part.format_spec is None and part.conversion == -1:
+            expr = part.value
+            if isinstance(expr, ast.Name) and expr.id == "left":
+                pools.append(LEFT_VALUES)
+            elif isinstance(expr, ast.Subscript) and isinstance(expr.value, ast.Name) and expr.value.id == "STATUS_LABEL" and labels:
+                pools.append(labels)
+            else:
+                return None
+        else:
+            return None
+    return ["".join(c) for c in itertools.product(*pools)]
+
+
+def _classify_node(status: int, node: ast.expr, lineno: int, out: list, note: str = "", labels: list[str] | None = None) -> None:
+    if isinstance(node, ast.Constant) and isinstance(node.value, str):
+        out.append({"status": status, "kind": "literal", "text": node.value, "lineno": lineno, "note": note})
+    elif isinstance(node, ast.JoinedStr):
+        out.append({"status": status, "kind": "fstring", "raw": ast.unparse(node), "lineno": lineno, "note": note,
+                    "variants": _expand_fstring(node, labels)})
+    elif isinstance(node, ast.Name):
+        out.append({"status": status, "kind": "variable", "raw": node.id, "lineno": lineno, "note": note})
+    elif isinstance(node, ast.IfExp):
+        _classify_node(status, node.body, lineno, out, note="條件運算式的 if 分支", labels=labels)
+        _classify_node(status, node.orelse, lineno, out, note="條件運算式的 else 分支", labels=labels)
+    else:
+        out.append({"status": status, "kind": "other", "raw": ast.unparse(node), "lineno": lineno, "note": note})
 
 
 def extract_http_exceptions(app_py_text: str) -> list:
-    """逐行掃 raise HTTPException(4xx/5xx, ...)。跨行呼叫、非字面值一律標記略過，不猜內容。"""
+    """用語法樹找 HTTPException(4xx/5xx, 訊息) 與 Reject(4xx/5xx, 訊息, 原因碼) 的呼叫。
+    舊版逐行用正規表示式只認 HTTPException，簽到路徑改用 Reject 之後一條都抓不到；跨行的
+    相鄰字串（"第一段" "第二段"）在語法樹裡已經併成一個字面值，不必再自己拼。"""
     out: list = []
-    for lineno, line in enumerate(app_py_text.splitlines(), 1):
-        m = HTTPEXC_RE.search(line)
-        if not m:
+    tree = ast.parse(app_py_text)
+    labels = _status_label_values(tree)
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Call):
             continue
-        status = int(m.group(1))
-        if status < 400:
+        fn = node.func
+        name = fn.id if isinstance(fn, ast.Name) else (fn.attr if isinstance(fn, ast.Attribute) else "")
+        if name not in ERROR_CALL_NAMES or len(node.args) < 2:
             continue
-        arg = m.group(2).strip()
-        if arg.count("(") != arg.count(")"):
-            out.append({"status": status, "kind": "other", "raw": arg, "lineno": lineno, "note": "括號不平衡，可能跨行呼叫，人工核對原始碼"})
+        code = node.args[0]
+        if not (isinstance(code, ast.Constant) and isinstance(code.value, int)) or code.value < 400:
             continue
-        if " if " in arg and " else " in arg:
-            # 三元運算式（例如依剩餘次數組出不同訊息），拆兩支分別判斷
-            try:
-                then_part, rest = arg.split(" if ", 1)
-                _cond, else_part = rest.split(" else ", 1)
-                _classify_arg(status, then_part, lineno, out, note="條件運算式的 if 分支")
-                _classify_arg(status, else_part, lineno, out, note="條件運算式的 else 分支")
-            except ValueError:
-                out.append({"status": status, "kind": "other", "raw": arg, "lineno": lineno, "note": "條件運算式拆解失敗，人工核對"})
-            continue
-        _classify_arg(status, arg, lineno, out)
+        _classify_node(code.value, node.args[1], node.lineno, out, labels=labels)
+    out.sort(key=lambda e: e["lineno"])
     return out
 
 
@@ -204,6 +236,10 @@ def build_size_table(exceptions: list):
         if e["kind"] == "literal":
             payload = json.dumps({"ok": False, "error": e["text"]}, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
             table.setdefault((e["status"], len(payload)), []).append(e["text"])
+        elif e["kind"] == "fstring" and e.get("variants"):  # left／STATUS_LABEL 展開後每一種組合都是固定字串
+            for text in e["variants"]:
+                payload = json.dumps({"ok": False, "error": text}, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
+                table.setdefault((e["status"], len(payload)), []).append(text)
         elif e["kind"] == "fstring":
             extra = f"（{e['note']}）" if e.get("note") else ""
             notes.append(f"app.py:{e['lineno']} status={e['status']} 略過（f-string，內容依請求而變）{extra}：{e['raw']}")
@@ -245,6 +281,10 @@ def main() -> int:
     start = datetime.strptime(f"{args.date} {args.time_from}", "%Y-%m-%d %H:%M").replace(tzinfo=TZ)
     end = datetime.strptime(f"{args.date} {args.time_to}", "%Y-%m-%d %H:%M").replace(tzinfo=TZ)
 
+    # 「裝置」欄是出口 IP 的雜湊，整個校園網路（NAT）後面的多支手機會併成同一個
+    # 不再有「疑似替人簽」的判斷，提示也不再提它
+    print("注意：「裝置」欄是出口 IP 的雜湊。同一個校園網路（NAT）後面的多支手機會併成同一個，"
+          "被擋的人可能被併掉；誰被擋、誰替誰簽以 tools/session_report.py 為準。")
     rows: list = []
     for entry in read_entries(sys.stdin):
         ts = entry.get("ts")
@@ -263,6 +303,7 @@ def main() -> int:
                 "dt": dt,
                 "ip": ip,
                 "dev": sha1_4(ip) if ip else "----",
+                "ua": ua,
                 "ua_cat": classify_ua(ua),
                 "method": req.get("method", ""),
                 "uri_masked": mask_uri(path),
@@ -290,11 +331,12 @@ def main() -> int:
 
     # 2. 漏斗彙總
     print("=== 漏斗彙總 ===")
-    # 打過老師端路徑的出口就是老師的機器（老師自己開 /c 看畫面不算學生）；用 rows 不用 kept，輪詢也算數
-    teacher_devs = {r["dev"] for r in rows if r["uri_masked"] == "/t" or r["uri_masked"].startswith(("/t/", "/api/t/"))}
+    # 打過老師端路徑的機器就是老師的機器（老師自己開 /c 看畫面不算學生）；用 rows 不用 kept，輪詢也算數。
+    # 機器＝（出口 IP、UA）這一組，不是整個出口 IP——老師與學生常在同一個校園出口後面，整個 IP 剔除會把同教室的學生一起丟掉
+    teacher_machines = {(r["ip"], r["ua"]) for r in rows if r["uri_masked"] == "/t" or r["uri_masked"].startswith(("/t/", "/api/t/"))}
     by_dev = defaultdict(list)
     for r in kept:
-        if STUDENT_MASKED_RE.match(r["uri_masked"]) and r["dev"] not in teacher_devs:
+        if STUDENT_MASKED_RE.match(r["uri_masked"]) and (r["ip"], r["ua"]) not in teacher_machines:
             by_dev[r["dev"]].append(r)
     devices = sorted(by_dev)
     print(f"不同學生裝置數：{len(devices)}")
@@ -311,7 +353,7 @@ def main() -> int:
         print("  " + cat + "：" + "、".join(f"{k}:{v}" for k, v in sorted(c.items(), key=lambda kv: str(kv[0]))))
 
     # 只有送出六位數（POST /c）才算改走 /c；打開首頁會被轉到 /c，那只是路過
-    c_devices = {r["dev"] for r in kept if r["uri_masked"] == "/c" and r["method"] == "POST" and r["dev"] not in teacher_devs}
+    c_devices = {r["dev"] for r in kept if r["uri_masked"] == "/c" and r["method"] == "POST" and (r["ip"], r["ua"]) not in teacher_machines}
     print(f"改走 /c（送出六位數）的裝置數：{len(c_devices)}")
 
     checkin = [r for r in kept if r["method"] == "POST" and r["uri_masked"] == "/api/checkin"]
@@ -320,7 +362,7 @@ def main() -> int:
 
     deltas: list = []
     never_checkin: list = []
-    proxy_suspect: list = []
+    rejected_only: list = []  # 送出過、但一次都沒成功（全被擋）——跟「落地後沒送出」是兩回事
     for dev in devices:
         entries = sorted(by_dev[dev], key=lambda r: r["dt"])
         first_landing = entries[0]["dt"]
@@ -328,14 +370,14 @@ def main() -> int:
         if success:
             first_success = min(r["dt"] for r in success)
             deltas.append((first_success - first_landing).total_seconds())
-            extra = [r for r in entries if r["uri_masked"] == "/api/checkin" and r["dt"] > first_success]
-            if extra:
-                proxy_suspect.append((dev, len(extra)))
         else:
-            # 「落地成功」＝GET /s/…/SIG 或 POST /c 拿到 200（不是失敗的 410/400），之後沒有任何 /api/checkin
+            # 「落地成功」＝GET /s/…/SIG 或 POST /c 拿到 200（不是失敗的 410/400）
             landed_ok = any(((r["uri_masked"] == "/c" and r["method"] == "POST") or LAND_MASKED_RE.match(r["uri_masked"]))
                             and r["status"] == 200 for r in entries)
-            if landed_ok:
+            posts = [r for r in entries if r["uri_masked"] == "/api/checkin" and r["method"] == "POST"]
+            if posts:
+                rejected_only.append((dev, Counter(r["status"] for r in posts)))
+            elif landed_ok:
                 never_checkin.append(dev)
 
     if deltas:
@@ -348,10 +390,9 @@ def main() -> int:
         print("第一次落地→第一次簽到 200 秒數分佈：（這個時間窗沒有成功簽到）")
 
     print(f"落地成功卻從未送出簽到的裝置：{len(never_checkin)} 支" + (f"（{', '.join(never_checkin)}）" if never_checkin else ""))
-    print(
-        f"同一裝置成功後又送出其他簽到（疑似替人簽）：{len(proxy_suspect)} 支"
-        + ("（" + "、".join(f"{d}×{n}" for d, n in proxy_suspect) + "）" if proxy_suspect else "")
-    )
+    print(f"送出簽到但從未成功的裝置：{len(rejected_only)} 支" + (
+        "（" + "、".join(f"{d} " + " ".join(f"{s}×{n}" for s, n in sorted(c.items(), key=lambda kv: str(kv[0])))
+                        for d, c in rejected_only) + "）" if rejected_only else ""))
     print()
 
     # 3. 用回應大小反推錯誤原因
@@ -363,7 +404,9 @@ def main() -> int:
         exceptions = extract_http_exceptions(app_path.read_text(encoding="utf-8"))
         table, notes = build_size_table(exceptions)
         n_literal = sum(1 for e in exceptions if e["kind"] == "literal")
-        print(f"從 {app_path.name} 抓到 {len(exceptions)} 條 4xx/5xx HTTPException，其中 {n_literal} 條是可算 byte 數的固定字串：")
+        n_expanded = sum(1 for e in exceptions if e["kind"] == "fstring" and e.get("variants"))
+        print(f"從 {app_path.name} 抓到 {len(exceptions)} 條 4xx/5xx HTTPException／Reject，其中 {n_literal} 條是可算 byte 數的固定字串、"
+              f"{n_expanded} 條 f-string 已展開成固定字串：")
         for (status, size), texts in sorted(table.items()):
             uniq = sorted(set(texts))
             print(f"  {size} bytes  {status}  " + " / ".join(f"「{t}」" for t in uniq))

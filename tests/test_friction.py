@@ -1,5 +1,5 @@
-"""學生端在實際上課時遇到的摩擦點，每條測試鎖住一個修正：QR 時效、PIN 錯誤提示、姓名與學號正規化、
-錯誤頁的裝置 cookie、限流、遲到判定、已綁裝置免 PIN、簽到憑證綁裝置。"""
+"""實地簽到摩擦的回歸測試。
+每條測試對應一個實地摩擦的一句話根因。"""
 import json
 import re
 import threading
@@ -22,7 +22,7 @@ def test_favicon_no_longer_404s(client):
 # qr_grace 可以大於 qr_interval
 
 def test_current_slots_grace_exceeds_interval_boundary(A):
-    """interval=10、grace=30：片結束後 29.9 秒仍有效、30.1 秒失效。"""
+    """interval=10、grace=30 的具體邊界，片結束後 29.9 秒仍有效、30.1 秒失效。"""
     sess = {"id": 1, "secret": "s"}
     settings = {"qr_interval": 10, "qr_grace": 30}
     slot_end = 100.0  # 片 9＝[90,100) 在 t=100 結束
@@ -50,7 +50,7 @@ def test_course_settings_grace_clamp_is_120_not_interval(A, seeded):
         con.execute("UPDATE courses SET settings=? WHERE id=?",
                     (json.dumps({"qr_interval": 5, "qr_grace": 200}), seeded["CD"]))
         st = A.course_settings(A.get_course(con, seeded["CD"]))
-    assert st["qr_grace"] == 120, "上限是 120，不該被 qr_interval（5）夾住"
+    assert st["qr_grace"] == 120, "上限是 120，不是被 qr_interval（5）夾住"
 
 
 def test_save_settings_grace_not_clamped_to_interval(h):
@@ -63,17 +63,17 @@ def test_save_settings_grace_not_clamped_to_interval(h):
     assert st["qr_grace"] == 60, "grace（60）大於 interval（10）應該原樣保留，不是被夾到 10"
 
 
-# QR 時效預設
+# QR 時效預設 10／30
 
 def test_default_qr_grace_is_30_seconds(A):
-    """預設 qr_interval 10 秒、qr_grace 30 秒。"""
+    """qr_grace 預設 30、qr_interval 預設 10。"""
     assert A.DEFAULT_SETTINGS["qr_grace"] == 30
     assert A.DEFAULT_SETTINGS["qr_interval"] == 10
 
 
 def test_no_context_pages_dont_hardcode_ten_seconds():
-    """code.html、help.html、home.html 沒有課程脈絡（qr_grace 可能被個別課程改掉），
-    寫死「每十秒」會在 grace 改大後講錯話，這幾頁一律用不帶數字的說法。"""
+    """code.html/help.html/home.html 沒有課程脈絡（qr_grace 可能被個別課程改掉），
+    寫死「每十秒」會在 grace 改大後講錯話——這幾頁一律改成不帶數字的說法。"""
     for name, snippets in (
         ("code.html", ["數字每十秒換一次"]),
         ("help.html", ["數字每十秒換一次", "QR 每十秒換"]),
@@ -86,7 +86,7 @@ def test_no_context_pages_dont_hardcode_ten_seconds():
 
 
 def test_help_anti_forward_paragraph_keeps_meaning():
-    """help.html 防轉傳那句保留原意：QR 會換、表單只能在開它的那支手機送出、老師會抽點。"""
+    """help.html 的防轉傳那句保留原意：QR 會換、表單只能在開它的那支手機送出、老師會抽點。"""
     text = (TEMPLATES / "help.html").read_text(encoding="utf-8")
     assert "QR 會" in text and "換" in text
     assert "只能在開它的那支手機送出" in text
@@ -119,11 +119,11 @@ def test_manage_set_qr_grace_allows_above_interval(A, seeded, capsys):
     assert st["qr_grace"] == 80
 
 
-# 換瀏覽器被誤導成首次綁定
+# 换瀏覽器被誤導成首次綁定
 
 def test_wrong_pin_with_pin2_always_explains_existing_pin(h):
-    """非首次、帶了 pin2、PIN 錯 → 一律回「已經設過 PIN」，不看是否已綁裝置。
-    已綁裝置回簽免 PIN，所以用另一支裝置模擬換瀏覽器（不同 cookie 罐）才會走到 PIN 驗證。"""
+    """非首次、帶了 pin2、PIN 錯 → 一律「已經設過 PIN」，不看是否已綁裝置（舊行為只在 device_hash 為空時給）。
+    已綁裝置回簽免 PIN，這裡改用另一支裝置模擬換瀏覽器（不同 cookie 罐）才吃得到 PIN 驗證。"""
     sid = h.open("CD")
     h.checkin(sid, "devA", "9994A001", name="學生1", pin="1111")  # devA 綁定成功，device_hash 已設
     # 換瀏覽器＝不同 cookie 罐（用另一支裝置模擬 LINE 內建瀏覽器）：
@@ -137,8 +137,8 @@ def test_wrong_pin_with_pin2_always_explains_existing_pin(h):
 
 
 def test_wrong_pin_without_pin2_gives_normal_countdown(h):
-    """對照組：沒有帶 pin2（換手機情境）PIN 錯，訊息應是正常的「剩 N 次」，不回「已經設過 PIN」。
-    已綁裝置回簽免 PIN，所以用另一支裝置才會走到 PIN 驗證。"""
+    """對照組：沒有帶 pin2（換手機情境）PIN 錯，訊息應是正常的「剩 N 次」，不是「已經設過 PIN」那句。
+    已綁裝置回簽免 PIN，這裡改用另一支裝置才吃得到 PIN 驗證。"""
     sid = h.open("CD")
     h.checkin(sid, "devB", "9994A002", name="學生2", pin="2222")
     r = h.dev("devB2").post("/api/checkin", data={
@@ -148,13 +148,13 @@ def test_wrong_pin_without_pin2_gives_normal_countdown(h):
 
 
 def test_pin_wrong_message_has_exit(h):
-    """PIN 錯誤的訊息要附上出路「忘記了請找老師重設」。"""
+    """pin_wrong 補出路：「忘記了請找老師重設」；鎖定訊息不變。"""
     sid = h.open("CD")
     h.checkin(sid, "cs9-owner", "9994A002", name="學生2", pin="2222")
     r = h.dev("cs9-wrong").post("/api/checkin", data={
         "grant": h.grant(sid, h.dev("cs9-wrong")), "student_id": "9994A002", "pin": "0000"})
     assert r.status_code == 401
-    assert r.json()["error"] == "PIN 錯誤，剩 2 次。忘記了請找老師重設"
+    assert r.json()["error"] == "PIN 錯誤，剩 2 次。先確認學號沒打錯；忘記了請找老師重設"  # 照新文字改
 
 
 # 姓名 NFKC 正規化
@@ -230,8 +230,8 @@ def test_code_error_paths_set_device_cookie(A):
 
 
 def test_no_cookie_fp_throttle_relaxed_to_ip_level(h):
-    """同 IP 同 UA 的 30 個沒 cookie 的 client 依序打 /c 錯碼，不得有人 429（一整班同款手機從同一個
-    出口 IP 連進來時，不能整批被擋）。要有進行中的點名，錯碼才會真的落到節流計數（否則
+    """同 IP 同 UA 的 30 個沒 cookie 的 client 依序打 /c 錯碼，不得有人 429。
+    30 人同款手機同出口 IP 曾全部被 429。要有進行中的點名，錯碼才會真的落到節流計數（否則
     code_submit 在「沒有進行中的點名」就先回了，根本不會記錄失敗次數）。"""
     from fastapi.testclient import TestClient
     h.open("CD")
@@ -263,7 +263,7 @@ def test_first_time_bind_blocked_by_other_device_does_not_write_pin(h):
     assert b["device_hash"] is None, "手機是別人的，不該綁裝置"
 
 
-# 遲到看「掃到」的時間
+# 遲到改看「掃到」時間
 
 def test_scanned_in_open_window_submitted_after_it_closes_is_present_no_was_late(h):
     """掃到（拿到 grant）當下在開放窗內，送出時窗已過但仍在 grant 時效內 → 出席、無 was_late 旗標。"""
@@ -273,10 +273,10 @@ def test_scanned_in_open_window_submitted_after_it_closes_is_present_no_was_late
         "spot_n": 3, "ip_check": "", "discord_channel": ""})
     sid = h.open("CD")
     with time_machine.travel(h.A.now(), tick=False) as trav:
-        phone = h.dev("grant-scan-open")
+        phone = h.dev("a3-scan-open")
         grant = h.grant(sid, phone)  # 掃到＝現在，還在 1 分鐘開放窗內
         trav.shift(90)  # 送出時已過開放窗（60 秒），但還在 grant_seconds（預設 180 秒）內
-        j = h.checkin(sid, "grant-scan-open", "9994A001", "學生1", pin="1234", grant=grant)
+        j = h.checkin(sid, "a3-scan-open", "9994A001", "學生1", pin="1234", grant=grant)
     assert j["ok"] is True
     assert j["status"] == "出席", j
     row = h.row(sid, "9994A001")
@@ -292,7 +292,7 @@ def test_scanned_after_open_window_is_late(h):
     sid = h.open("CD")
     with time_machine.travel(h.A.now(), tick=False) as trav:
         trav.shift(90)  # 已過開放窗（60 秒），還在遲到窗（15 分鐘）內
-        j = h.checkin(sid, "grant-scan-late", "9994A002", "學生2", pin="1234")
+        j = h.checkin(sid, "a3-scan-late", "9994A002", "學生2", pin="1234")
     assert j["ok"] is True
     assert j["status"] == "遲到", j
     row = h.row(sid, "9994A002")
@@ -300,20 +300,21 @@ def test_scanned_after_open_window_is_late(h):
 
 
 def test_past_late_until_still_closed_regardless_of_scan_time(h):
-    """場次已過遲到窗時送出，仍回「點名已結束」，不因掃到時間在窗內而放行。"""
+    """不變的行為：場次已過遲到窗時送出，仍回「點名已結束」，不因掃到時間在窗內而放行。"""
     cid = h.cid["CD"]
     with h.A.db() as con:
         con.execute("UPDATE courses SET settings=? WHERE id=?",
                     (json.dumps({"open_minutes": 1, "late_minutes": 2, "grant_seconds": 600}), cid))
     sid = h.open("CD")
     with time_machine.travel(h.A.now(), tick=False) as trav:
-        phone = h.dev("grant-past-late")
+        phone = h.dev("a3-past-late")
         grant = h.grant(sid, phone)  # 掃到在開放窗（60 秒）內
         trav.shift(150)  # 遠超遲到窗（2 分鐘＝120 秒），但還在 grant_seconds（600 秒）內
         r = phone.post("/api/checkin", data={"grant": grant, "student_id": "9994A001", "name": "學生1",
                                               "pin": "1234", "pin2": "1234", "seat": "", "hints": "h"})
     assert r.status_code == 410
-    assert "點名已結束" in r.json()["error"]
+    # 沒有新場次時的訊息是「點名已經結束。有到課但沒簽到的同學，請直接找老師。」
+    assert "點名已經結束" in r.json()["error"], r.json()
 
 
 def test_old_three_part_grant_is_invalid(h):
@@ -321,7 +322,7 @@ def test_old_three_part_grant_is_invalid(h):
     sid = h.open("CD")
     A = h.A
     old_grant = A.make_token("g", str(sid), A.secrets.token_hex(6), exp=A.now() + 180)
-    phone = h.dev("grant-old-grant")
+    phone = h.dev("a3-old-grant")
     r = phone.post("/api/checkin", data={"grant": old_grant, "student_id": "9994A001", "name": "學生1",
                                          "pin": "1234", "pin2": "1234", "seat": "", "hints": "h"})
     assert r.status_code == 410
@@ -336,48 +337,48 @@ def _add_student(h, course, stu, name):
                     (h.cid[course], stu, name, ""))
 
 
-def test_name_exact_match_passes_no_flag(h):
+def test_exact_match_passes_no_flag(h):
     sid = h.open("CD")
-    j = h.checkin(sid, "name-exact", "9994A001", name="學生1", pin="1234")
+    j = h.checkin(sid, "a4-exact", "9994A001", name="學生1", pin="1234")
     assert j["ok"] is True, j
     row = h.row(sid, "9994A001")
     assert "name_variant" not in row["flags"], row["flags"]
 
 
-def test_name_variant_character_not_at_first_position_passes_with_flag(h):
+def test_variant_character_not_at_first_position_passes_with_flag(h):
     """溫/温 這類異體字打法（差異不在第一個字）：字數相同、第一個字相同 → 通過並帶 name_variant 旗標。"""
-    _add_student(h, "CD", "9995N01", "林溫蒂")
+    _add_student(h, "CD", "A4S01", "林溫蒂")
     sid = h.open("CD")
-    j = h.checkin(sid, "name-variant", "9995N01", name="林温蒂", pin="1234")
+    j = h.checkin(sid, "a4-variant", "A4S01", name="林温蒂", pin="1234")
     assert j["ok"] is True, j
-    row = h.row(sid, "9995N01")
+    row = h.row(sid, "A4S01")
     assert "name_variant" in row["flags"], row["flags"]
 
 
-def test_same_surname_same_length_different_name_passes_with_flag(h):
-    """同姓同字數的不同名字也會通過並帶旗標：比對刻意放寬，這是已知的代價。"""
-    _add_student(h, "CD", "9995N02", "王小明")
+def test_same_surname_same_length_different_name_passes_with_flag_known_tradeoff(h):
+    """同姓同字數的不同名字也會通過並帶旗標——這是刻意放寬的已知代價，不是漏洞。"""
+    _add_student(h, "CD", "A4S02", "王小明")
     sid = h.open("CD")
-    j = h.checkin(sid, "name-samesurname", "9995N02", name="王小華", pin="1234")
+    j = h.checkin(sid, "a4-samesurname", "A4S02", name="王小華", pin="1234")
     assert j["ok"] is True, j
-    row = h.row(sid, "9995N02")
+    row = h.row(sid, "A4S02")
     assert "name_variant" in row["flags"], row["flags"]
 
 
-def test_name_different_length_is_rejected(h):
-    _add_student(h, "CD", "9995N03", "王小明")
+def test_different_length_is_rejected(h):
+    _add_student(h, "CD", "A4S03", "王小明")
     sid = h.open("CD")
-    j = h.checkin(sid, "name-lendiff", "9995N03", name="王小明華", pin="1234")
+    j = h.checkin(sid, "a4-lendiff", "A4S03", name="王小明華", pin="1234")
     assert j["ok"] is False and "學號或姓名" in j["error"], j
-    assert not h.row(sid, "9995N03")["status"]
+    assert not h.row(sid, "A4S03")["status"]
 
 
-def test_name_different_first_char_is_rejected(h):
-    _add_student(h, "CD", "9995N04", "王小明")
+def test_different_first_char_is_rejected(h):
+    _add_student(h, "CD", "A4S04", "王小明")
     sid = h.open("CD")
-    j = h.checkin(sid, "name-firstdiff", "9995N04", name="李小明", pin="1234")
+    j = h.checkin(sid, "a4-firstdiff", "A4S04", name="李小明", pin="1234")
     assert j["ok"] is False and "學號或姓名" in j["error"], j
-    assert not h.row(sid, "9995N04")["status"]
+    assert not h.row(sid, "A4S04")["status"]
 
 
 def test_existing_row_from_resubmit_not_retroactively_flagged(h):
@@ -385,14 +386,14 @@ def test_existing_row_from_resubmit_not_retroactively_flagged(h):
     一個「字數相同、第一個字相同」的不同名字，既有列也不會因此被補上 name_variant（因為 already
     早退不會重新跑姓名比對）。"""
     sid = h.open("CD")
-    j1 = h.checkin(sid, "name-again", "9994A001", name="學生1", pin="1234")
+    j1 = h.checkin(sid, "a4-again", "9994A001", name="學生1", pin="1234")
     assert j1["ok"] is True and "name_variant" not in h.row(sid, "9994A001")["flags"]
-    j2 = h.checkin(sid, "name-again", "9994A001", name="學生九", pin="1234")  # 已綁定同手機，回原收據
+    j2 = h.checkin(sid, "a4-again", "9994A001", name="學生九", pin="1234")  # 已綁定同手機，回原收據
     assert j2["ok"] is True and j2.get("again") is True
     assert "name_variant" not in h.row(sid, "9994A001")["flags"]
 
 
-# 過期頁與錯誤頁的「找老師」提示
+# 過期頁與錯誤頁加「找老師」
 
 FIND_TEACHER_TEXT = "手機掃不過，不要借同學的手機，直接舉手找老師。"
 
@@ -408,7 +409,7 @@ def test_find_teacher_text_present_in_code_and_student_templates():
 def test_expired_page_shows_find_teacher_text(h):
     sid = h.open("CD")
     bad_sig = "0" * 10
-    r = h.dev("sig-expired").get(f"/s/{sid}/0/{bad_sig}")
+    r = h.dev("a5-expired").get(f"/s/{sid}/0/{bad_sig}")
     assert r.status_code == 410
     assert FIND_TEACHER_TEXT in r.text
 
@@ -417,10 +418,10 @@ def test_expired_page_shows_find_teacher_text(h):
 
 def test_bound_device_checkin_without_pin_succeeds(h):
     sid0 = h.open("CD")
-    h.checkin(sid0, "bind-bound", "9994A001", name="學生1", pin="1234")  # 首次綁定
+    h.checkin(sid0, "a2-bound", "9994A001", name="學生1", pin="1234")  # 首次綁定
     h.T.post(f"/api/t/session/{sid0}/close")
     sid = h.open("CD")
-    dev = h.dev("bind-bound")
+    dev = h.dev("a2-bound")
     r = dev.post("/api/checkin", data={
         "grant": h.grant(sid, dev), "student_id": "9994A001", "name": "學生1", "pin": "", "seat": "", "hints": "h"})
     assert r.status_code == 200, r.text
@@ -430,10 +431,10 @@ def test_bound_device_checkin_without_pin_succeeds(h):
 
 def test_bound_device_wrong_pin_still_succeeds_and_no_fail_count(h):
     sid0 = h.open("CD")
-    h.checkin(sid0, "bind-wrongpin", "9994A002", name="學生2", pin="1234")
+    h.checkin(sid0, "a2-wrongpin", "9994A002", name="學生2", pin="1234")
     h.T.post(f"/api/t/session/{sid0}/close")
     sid = h.open("CD")
-    dev = h.dev("bind-wrongpin")
+    dev = h.dev("a2-wrongpin")
     r = dev.post("/api/checkin", data={
         "grant": h.grant(sid, dev), "student_id": "9994A002", "name": "學生2", "pin": "0000", "seat": "", "hints": "h"})
     assert r.status_code == 200, r.text
@@ -445,10 +446,10 @@ def test_bound_device_wrong_pin_still_succeeds_and_no_fail_count(h):
 
 def test_other_device_without_pin_still_rejected(h):
     sid0 = h.open("CD")
-    h.checkin(sid0, "bind-owner", "9994A003", name="學生3", pin="1234")
+    h.checkin(sid0, "a2-owner", "9994A003", name="學生3", pin="1234")
     h.T.post(f"/api/t/session/{sid0}/close")
     sid = h.open("CD")
-    dev = h.dev("bind-stranger")
+    dev = h.dev("a2-stranger")
     r = dev.post("/api/checkin", data={
         "grant": h.grant(sid, dev), "student_id": "9994A003", "name": "學生3", "pin": "", "seat": "", "hints": "h"})
     assert r.status_code == 400
@@ -457,12 +458,12 @@ def test_other_device_without_pin_still_rejected(h):
 
 def test_unbound_after_teacher_unbind_requires_old_pin(h):
     sid0 = h.open("CD")
-    h.checkin(sid0, "bind-unbind-old", "9994A004", name="學生4", pin="1234")
+    h.checkin(sid0, "a2-unbind-old", "9994A004", name="學生4", pin="1234")
     pk = h.pk("CD", "9994A004")
     h.T.post(f"/api/t/student/{pk}/unbind", data={"reset_pin": ""})  # 只解裝置，保留 PIN
     h.T.post(f"/api/t/session/{sid0}/close")
     sid = h.open("CD")
-    newphone = h.dev("bind-newphone")
+    newphone = h.dev("a2-newphone")
     r1 = newphone.post("/api/checkin", data={
         "grant": h.grant(sid, newphone), "student_id": "9994A004", "name": "學生4", "pin": "", "seat": "", "hints": "h"})
     assert r1.status_code == 400, "新裝置不帶 PIN 應該被拒"
@@ -475,21 +476,21 @@ def test_unbound_after_teacher_unbind_requires_old_pin(h):
 
 
 def test_bound_device_not_locked_out_by_others_wrong_pins(h):
-    """已綁裝置平日免 PIN，PIN 鎖定也不該擋到本人已綁的那支手機。
+    """平日免 PIN 之後，PIN 鎖定不該擋到本人已綁的那支手機。
     不然同學從別支裝置亂猜某人的 PIN 猜到全場上限，就能讓他本人這堂課簽不了到。"""
     sid0 = h.open("CD")
-    h.checkin(sid0, "bind-victim", "9994A001", name="學生1", pin="1234")
+    h.checkin(sid0, "a2-victim", "9994A001", name="學生1", pin="1234")
     h.T.post(f"/api/t/session/{sid0}/close")
     sid = h.open("CD")
     pk = h.pk("CD", "9994A001")
     with h.A.db() as con:  # 直接把「全場該生總計」灌到上限，等同別支裝置已猜錯這麼多次
         con.execute("INSERT INTO pin_fail(session_id, student_pk, device_hash, n) VALUES(?,?,'',?)",
                     (sid, pk, h.A.PIN_MAX_FAIL_TOTAL))
-    stranger = h.dev("bind-attacker")
+    stranger = h.dev("a2-attacker")
     r = stranger.post("/api/checkin", data={
         "grant": h.grant(sid, stranger), "student_id": "9994A001", "name": "學生1", "pin": "9999", "seat": "", "hints": "h"})
     assert r.status_code == 423, "別支裝置仍應被鎖"
-    owner = h.dev("bind-victim")
+    owner = h.dev("a2-victim")
     r = owner.post("/api/checkin", data={
         "grant": h.grant(sid, owner), "student_id": "9994A001", "name": "學生1", "pin": "", "seat": "", "hints": "h"})
     assert r.status_code == 200, r.text
@@ -515,7 +516,7 @@ def test_variant_first_bind_is_pending_with_both_flags(h):
 
 
 def test_exact_first_bind_still_present(h):
-    """對照組：exact 首綁沒有 name_variant，狀態是出席（開放窗內）。"""
+    """exact 首綁行為不變：沒有 name_variant，狀態照舊是出席（開放窗內）。"""
     sid = h.open("CD")
     j = h.checkin(sid, "cs1-exact", "9994A001", name="學生1", pin="1234")
     assert j["ok"] is True, j
@@ -525,8 +526,8 @@ def test_exact_first_bind_still_present(h):
 
 
 def test_variant_spotcheck_present_restores_was_late(h):
-    """抽點判在場後依 was_late 還原成出席或遲到：variant 首綁若掃到時已過開放窗、落在遲到窗內，
-    pending 狀態帶 was_late；老師抽點判在場時要還原成遲到。"""
+    """抽點判在場後依 was_late 還原成出席／遲到（既有邏輯，這裡補斷言）：variant 首綁若掃到時
+    已過開放窗、落在遲到窗內，pending 狀態帶 was_late；老師抽點判在場時要還原成遲到，不是出席。"""
     cid = h.cid["CD"]
     h.T.post(f"/t/course/{cid}/settings", data={
         "open_minutes": 1, "late_minutes": 15, "qr_interval": 10, "qr_grace": 30,
@@ -597,7 +598,8 @@ def test_relayed_grant_rejected_on_first_use_by_other_device(h):
     r = devB.post("/api/checkin", data={"grant": grant, "student_id": "9994A001", "name": "學生1",
                                          "pin": "1234", "pin2": "1234", "hints": "h"})
     assert r.status_code == 410, r.text
-    assert r.json()["error"] == "這份簽到表單是別支手機掃到的，請自己重新掃描 QR"
+    # 這句是中性訊息，不講「別支手機掃到的」（像在指控本人）
+    assert r.json()["error"] == "這份簽到表單和這支手機對不上（可能重新整理過或開了兩個分頁），請重新掃描 QR"
     with h.A.db() as con:
         gsig = grant.rsplit(":", 1)[-1]
         row = con.execute("SELECT device_hash FROM grants WHERE sig=?", (gsig,)).fetchone()
@@ -670,10 +672,10 @@ def test_bound_device_exempt_from_ip_throttle(h):
     assert r_unbound.status_code == 429, r_unbound.text
 
 
-# https 下裝置 cookie 用 __Host- 前綴
+# 裝置 cookie 使用 __Host- 前綴
 
 class _FakeReq:
-    """函式層測試用的假請求：只需要 .cookies，不必真的發 HTTP 請求。"""
+    """函式層測試：只需要 .cookies，不必真的發 HTTP 請求。"""
     def __init__(self, cookies):
         self.cookies = cookies
 
@@ -699,12 +701,12 @@ def test_https_mode_legacy_adopted_only_if_bound(A, monkeypatch):
         con.execute("INSERT INTO students(course_id,student_id,name,device_hash) VALUES(?,?,?,?)",
                     (cid, "9994A001", "學生1", A.hash_device(legacy)))
     A_req = _FakeReq({"attend_dk": legacy})
-    assert A.effective_device_key(A_req) == legacy, "已用舊名 cookie 綁定的裝置不必重綁"
+    assert A.effective_device_key(A_req) == legacy, "9/10 已綁的舊名裝置不必重綁"
 
 
 def test_https_mode_legacy_adopted_with_explicit_con(A, monkeypatch):
-    """con 有給就沿用呼叫端的連線查舊名有沒有綁，不必臨時開一條。student_entry、render_student
-    都這樣呼叫，真實請求走的是這條路徑；上一條測試走的是臨時開連線那條。"""
+    """con 有給就沿用呼叫端的連線查舊名有沒有綁，不必臨時開一條（student_entry／render_student
+    都是這樣用的，真實請求走的是這條，不是上一條測試用的臨時開連線那條）。"""
     monkeypatch.setattr(A, "DK_COOKIE", "__Host-attend_dk")
     legacy = "boundoldname0000000000001"
     with A.db() as con:
@@ -730,9 +732,10 @@ def test_https_mode_legacy_ignored_if_unbound(A, monkeypatch):
 
 
 def test_student_entry_calls_effective_device_key_once(h, monkeypatch):
-    """student_entry 自己的函式主體只呼叫一次 effective_device_key，落地事件與後續判斷共用結果。
-    下游 render_student、ensure_device_cookie_value 各自為了自己的目的另外呼叫，不算在 student_entry
-    的次數內，所以用呼叫端 frame 名稱過濾，只數直接由 student_entry 發出的呼叫。"""
+    """student_entry 自己的函式主體舊版呼叫了兩次（device8 那一行算一次、if 條件又算一次），
+    要收斂成一次；下游 render_student／ensure_device_cookie_value 各自為了自己的目的另外呼叫，
+    不算在 student_entry 這一支的次數內，所以用呼叫端frame 名稱過濾，只數「直接由 student_entry
+    呼叫」的那幾次。"""
     import traceback
     dev = h.dev("s7-entry")  # 先暖身拿到裝置 cookie，monkeypatch 之後才不會把 /c 的呼叫也算進去
     sid = h.open("CD")
@@ -756,3 +759,734 @@ def test_student_entry_calls_effective_device_key_once(h, monkeypatch):
     r = dev.get(f"/s/{sid}/{slot}/{sig}")
     assert r.status_code == 200, r.text
     assert len(calls) == 1, f"student_entry 應該只呼叫一次 effective_device_key，實得 {len(calls)}"
+
+
+# 出席／遲到看同一支手機本場最早掃到的時間
+
+def _land(h, sid, dev):
+    """透過 /s/{sid}/{slot}/{sig} 落地（跟真正掃 QR 同一條路徑，會留下 land_ok 事件），回傳這次的 GRANT。"""
+    with h.A.db() as con:
+        s = h.A.get_session(con, sid)
+        c = h.A.get_course(con, s["course_id"])
+        st = h.A.course_settings(c)
+    iv = st["qr_interval"]
+    slot = int(h.A.now() // iv)
+    sig = h.A.slot_sig(s, slot)
+    html = h.dev(dev).get(f"/s/{sid}/{slot}/{sig}").text
+    m = re.search(r'GRANT="([^"]+)"', html)
+    assert m, html
+    return m.group(1)
+
+
+def _set_open_60s(h):
+    h.T.post(f"/t/course/{h.cid['CD']}/settings", data={
+        "open_minutes": 1, "late_minutes": 15, "qr_interval": 10, "qr_grace": 30,
+        "spot_n": 3, "ip_check": "", "discord_channel": ""})
+
+
+def test_earliest_land_within_window_is_present_no_was_late(h):
+    """開放窗 60 秒：同一裝置開場 50 秒落地、70 秒重新落地並用第二張憑證送出 → 出席、無 was_late。"""
+    _set_open_60s(h)
+    with time_machine.travel(h.A.now(), tick=False) as trav:
+        sid = h.open("CD")
+        trav.shift(50)
+        _land(h, sid, "dev2-a")  # 第一次落地：開場後 50 秒，還在開放窗內
+        trav.shift(20)  # 現在開場後 70 秒
+        grant2 = _land(h, sid, "dev2-a")  # 同一支裝置重新落地，第二張憑證
+        j = h.dev("dev2-a").post("/api/checkin", data={
+            "grant": grant2, "student_id": "9994A001", "name": "學生1", "pin": "1111", "pin2": "1111", "hints": "h"}).json()
+    assert j["ok"] is True, j
+    assert j["status"] == "出席", j
+    row = h.row(sid, "9994A001")
+    assert "was_late" not in row["flags"], row["flags"]
+
+
+def test_only_late_land_is_still_late(h):
+    """只在 70 秒落地一次 → 遲到＋was_late（原行為不變）。"""
+    _set_open_60s(h)
+    with time_machine.travel(h.A.now(), tick=False) as trav:
+        sid = h.open("CD")
+        trav.shift(70)
+        grant = _land(h, sid, "dev2-b")
+        j = h.dev("dev2-b").post("/api/checkin", data={
+            "grant": grant, "student_id": "9994A002", "name": "學生2", "pin": "2222", "pin2": "2222", "hints": "h"}).json()
+    assert j["ok"] is True, j
+    assert j["status"] == "遲到", j
+    row = h.row(sid, "9994A002")
+    assert "was_late" in row["flags"], row["flags"]
+
+
+def test_other_device_early_land_does_not_help_this_device(h):
+    """另一支裝置在 50 秒落地，不影響這支裝置 70 秒落地的判定（仍是遲到）。"""
+    _set_open_60s(h)
+    with time_machine.travel(h.A.now(), tick=False) as trav:
+        sid = h.open("CD")
+        trav.shift(50)
+        _land(h, sid, "dev2-other")  # 別支手機 50 秒落地
+        trav.shift(20)
+        grant = _land(h, sid, "dev2-c")  # 這支手機只在 70 秒落地一次
+        j = h.dev("dev2-c").post("/api/checkin", data={
+            "grant": grant, "student_id": "9994A003", "name": "學生3", "pin": "3333", "pin2": "3333", "hints": "h"}).json()
+    assert j["ok"] is True, j
+    assert j["status"] == "遲到", j
+    row = h.row(sid, "9994A003")
+    assert "was_late" in row["flags"], row["flags"]
+
+
+def test_previous_session_land_ok_not_counted(h):
+    """上一場的 land_ok 不算進這一場。"""
+    _set_open_60s(h)
+    sid0 = h.open("CD")
+    _land(h, sid0, "dev2-d")  # 上一場的落地（此刻）
+    h.T.post(f"/api/t/session/{sid0}/close")
+    with time_machine.travel(h.A.now(), tick=False) as trav:
+        sid = h.open("CD")
+        trav.shift(70)  # 這一場只在 70 秒落地一次
+        grant = _land(h, sid, "dev2-d")  # 同一支裝置
+        j = h.dev("dev2-d").post("/api/checkin", data={
+            "grant": grant, "student_id": "9994A004", "name": "學生4", "pin": "4444", "pin2": "4444", "hints": "h"}).json()
+    assert j["ok"] is True, j
+    assert j["status"] == "遲到", j
+
+
+def test_c_dot_code_path_has_no_land_ok_unaffected(h):
+    """經 /c（六位數）拿到的憑證沒有 land_ok 事件，行為不變：一樣看 issued（掃到時間）。"""
+    _set_open_60s(h)
+    with time_machine.travel(h.A.now(), tick=False) as trav:
+        sid = h.open("CD")
+        trav.shift(70)  # 這個管道本來就沒有落地事件，直接在遲到窗內才拿代碼
+        phone = h.dev("dev2-e")
+        grant = h.grant(sid, phone)  # 走 /c，不是 /s/.../.../...，沒有 land_ok 事件；issued 就是這一刻（70 秒）
+        j = phone.post("/api/checkin", data={
+            "grant": grant, "student_id": "9994A001", "name": "學生1", "pin": "1111", "pin2": "1111", "hints": "h"}).json()
+    assert j["ok"] is True, j
+    assert j["status"] == "遲到", j
+
+
+# 同一個錯 PIN 的重送不重複計次
+
+def test_same_wrong_pin_resend_not_double_counted(h):
+    sid0 = h.open("CD")
+    h.checkin(sid0, "dev3-owner", "9994A001", name="學生1", pin="1234")
+    h.T.post(f"/api/t/session/{sid0}/close")
+    sid = h.open("CD")
+    attacker = h.dev("dev3-attacker")
+
+    def wrong(pin):
+        return attacker.post("/api/checkin", data={
+            "grant": h.grant(sid, attacker), "student_id": "9994A001", "name": "學生1", "pin": pin}).json()
+
+    r1 = wrong("0000")
+    assert r1["ok"] is False and "剩 2 次" in r1["error"], r1
+    r2 = wrong("0000")  # 同一個錯 PIN 60 秒內重送，不重複計次
+    assert "剩 2 次" in r2["error"], r2
+    r3 = wrong("9999")  # 換一組錯的 PIN，照現在規則正常累加
+    assert "剩 1 次" in r3["error"], r3
+
+
+def test_same_wrong_pin_after_dedup_window_counts_again(h):
+    sid0 = h.open("CD")
+    h.checkin(sid0, "dev3b-owner", "9994A002", name="學生2", pin="1234")
+    h.T.post(f"/api/t/session/{sid0}/close")
+    sid = h.open("CD")
+    attacker = h.dev("dev3b-attacker")
+    r1 = attacker.post("/api/checkin", data={
+        "grant": h.grant(sid, attacker), "student_id": "9994A002", "name": "學生2", "pin": "0000"}).json()
+    assert "剩 2 次" in r1["error"], r1
+    with time_machine.travel(h.A.now(), tick=False) as trav:
+        trav.shift(61)  # 超過 60 秒的重送窗
+        r2 = attacker.post("/api/checkin", data={
+            "grant": h.grant(sid, attacker), "student_id": "9994A002", "name": "學生2", "pin": "0000"}).json()
+    assert "剩 1 次" in r2["error"], r2
+
+
+# 待確認的收據要說對原因
+
+def test_pending_reason_name_variant(h):
+    _add_student(h, "CD", "DEV1S01", "林溫蒂")
+    sid = h.open("CD")
+    j = h.checkin(sid, "dev4-variant", "DEV1S01", name="林温蒂", pin="1234")
+    assert j["ok"] is True, j
+    assert j["status"] == "待確認", j
+    assert j["pending_reason"] == "name_variant", j
+
+
+def test_pending_reason_same_device(h):
+    sid = h.open("CD")
+    dev = h.dev("dev4-same")
+    h.checkin(sid, "dev4-same", "9994A001", name="學生1", pin="1234")
+    j2 = dev.post("/api/checkin", data={
+        "grant": h.grant(sid, dev), "student_id": "9994A002", "name": "學生2", "pin": "5555", "pin2": "5555"}).json()
+    assert j2["ok"] is True, j2
+    assert j2["status"] == "待確認", j2
+    assert j2["pending_reason"] == "same_device", j2
+
+
+def test_student_html_notes_distinguish_reasons():
+    """name_variant 的文案是提醒核對學號、多半是打錯。"""
+    text = (TEMPLATES / "student.html").read_text(encoding="utf-8")
+    assert "你填的姓名和名冊的寫法不完全一樣。請先看上面的學號和姓名是不是你本人：不是的話馬上舉手找老師（多半是學號打錯）；是的話老師會當場確認，確認前不算出席。" in text
+    assert "系統看到這支手機簽過別的學號，老師會當場確認，確認前不算出席。" in text
+    assert "pending_reason" in text
+
+
+# /me 逾時與倒數餘裕
+
+def test_student_html_countdown_starts_at_grant_seconds_minus_5():
+    text = (TEMPLATES / "student.html").read_text(encoding="utf-8")
+    assert "Math.max(10,GRANT_SECONDS-5)" in text, "倒數初始值沒有改成 GRANT_SECONDS-5（最少 10 秒）"
+
+
+def test_me_html_has_10s_fetch_timeout():
+    text = (TEMPLATES / "me.html").read_text(encoding="utf-8")
+    assert "timeoutSignal(10000)" in text, "/api/me 沒有加 10 秒逾時"
+
+
+# 打錯學號撞到同學、PIN 錯誤訊息講清楚次數
+# 每個測試用獨一無二的裝置名稱（h.dev 的 cookie 罐跨測試共用）。
+
+def _ci10(h, sid, dev, stu, name="", pin="", pin2=""):
+    cl = h.dev(dev)
+    return cl.post("/api/checkin", data={"grant": h.grant(sid, cl), "student_id": stu, "name": name, "pin": pin,
+                                         "pin2": pin2, "hints": "h"},
+                   headers={"user-agent": "iPhone", "cf-connecting-ip": "140.131.1.1"})
+
+
+def _two_bound(h, tag, pin_a="1111", pin_b="2222"):
+    """甲（9994A001）、乙（9994A002）各自首綁並簽到，結束；回本週新的一場 sid。
+    夾具名冊的「學生1」「學生2」同字數同首字，彼此就是 variant（寬鬆比對放行），測不出姓名不符，
+    所以把兩人改成首字不同的名字。"""
+    with h.A.db() as con:
+        con.execute("UPDATE students SET name='王小明' WHERE course_id=? AND student_id='9994A001'", (h.cid["CD"],))
+        con.execute("UPDATE students SET name='李大華' WHERE course_id=? AND student_id='9994A002'", (h.cid["CD"],))
+    s1 = h.open("CD")
+    assert h.checkin(s1, f"{tag}-甲", "9994A001", name="王小明", pin=pin_a)["ok"]
+    assert h.checkin(s1, f"{tag}-乙", "9994A002", name="李大華", pin=pin_b)["ok"]
+    h.T.post(f"/api/t/session/{s1}/close")
+    return h.open("CD")
+
+
+def _dev_hash_of(h, stu):
+    with h.A.db() as con:
+        return con.execute("SELECT device_hash FROM students WHERE course_id=? AND student_id=?",
+                           (h.cid["CD"], stu)).fetchone()["device_hash"]
+
+
+def _pin_fail_rows(h, stu):
+    with h.A.db() as con:
+        return con.execute("SELECT * FROM pin_fail WHERE student_pk=?", (h.pk("CD", stu),)).fetchall()
+
+
+def test_typo_id_with_own_name_rejected_without_touching_classmate(h):
+    s2 = _two_bound(h, "twobound-a")
+    before = _dev_hash_of(h, "9994A002")
+    r = _ci10(h, s2, "twobound-a-new", "9994A002", name="王小明", pin="1111", pin2="1111")
+    assert r.status_code == 400, r.text
+    assert "名冊不符" in r.json()["error"], r.text
+    assert _pin_fail_rows(h, "9994A002") == []
+    assert _dev_hash_of(h, "9994A002") == before
+
+
+def test_typo_id_same_pin_does_not_move_classmates_binding(h):
+    s2 = _two_bound(h, "twobound-b", pin_a="1111", pin_b="1111")
+    before = _dev_hash_of(h, "9994A002")
+    r = _ci10(h, s2, "twobound-b-new", "9994A002", name="王小明", pin="1111", pin2="1111")
+    assert r.status_code == 400, r.text
+    assert _dev_hash_of(h, "9994A002") == before
+    assert "9994A002" not in h.db_rows(s2)
+
+
+def test_own_id_and_roster_name_still_rebinds(h):
+    s2 = _two_bound(h, "twobound-c")
+    r = _ci10(h, s2, "twobound-c-new", "9994A001", name="王小明", pin="1111", pin2="1111")
+    assert r.status_code == 200, r.text
+    assert r.json()["rebound"] is True, r.text
+
+
+def test_variant_name_rebinds_as_pending(h):
+    # 換瀏覽器改綁時姓名只是同姓同字數：PIN 對照樣改綁，但轉待確認
+    s2 = _two_bound(h, "twobound-d")
+    r = _ci10(h, s2, "twobound-d-new", "9994A001", name="王小華", pin="1111", pin2="1111")  # 同字數、同首字
+    assert r.status_code == 200, r.text
+    j = r.json()
+    assert j["rebound"] is True and j["status"] == "待確認" and j.get("pending_reason") == "name_variant", j
+
+
+def test_pin_only_mode_empty_name_not_compared(h):
+    s2 = _two_bound(h, "twobound-e")
+    r = _ci10(h, s2, "twobound-e-new", "9994A001", name="", pin="1111", pin2="")
+    assert r.status_code == 200, r.text
+
+
+def test_pin_exists_message_counts_the_attempt(h):
+    s2 = _two_bound(h, "pinmsg-a")
+    r = _ci10(h, s2, "pinmsg-a-new", "9994A001", name="王小明", pin="9991", pin2="9991")
+    assert r.status_code == 401, r.text
+    err = r.json()["error"]
+    assert "已經設過 PIN" in err and "剩 2 次" in err, err
+    assert err == ("這個學號已經設過 PIN，你輸入的不是原本那組（剩 2 次）。先確認學號沒打錯，再輸入原本的 PIN；忘記了請找老師重設")
+    r = _ci10(h, s2, "pinmsg-a-new", "9994A001", pin="9992")
+    assert r.status_code == 401 and r.json()["error"] == "PIN 錯誤，剩 1 次。先確認學號沒打錯；忘記了請找老師重設", r.text
+    r = _ci10(h, s2, "pinmsg-a-new", "9994A001", pin="9993")
+    print("第三次錯：", r.status_code, r.json()["error"])
+    assert "錯太多次" in r.json()["error"], r.text
+    r = _ci10(h, s2, "pinmsg-a-new", "9994A001", pin="9994")
+    print("第四次：", r.status_code, r.json()["error"])
+    assert r.status_code == 423, r.text
+
+
+def test_pin_exists_message_when_already_at_limit(h):
+    s2 = _two_bound(h, "pinmsg-b")
+    for p in ("9991", "9992"):
+        assert _ci10(h, s2, "pinmsg-b-new", "9994A001", pin=p).status_code == 401
+    r = _ci10(h, s2, "pinmsg-b-new", "9994A001", name="王小明", pin="9993", pin2="9993")
+    assert r.status_code == 401, r.text
+    # 鎖定字句提到「重設」，前半保留
+    assert r.json()["error"] == ("這個學號已經設過 PIN，你輸入的不是原本那組，PIN 錯太多次，這一場請找老師手動簽到。"
+                                 "忘了 PIN 的話，請老師在名冊頁按「重設」，重設後重新掃 QR 設一組新的。"), r.text
+
+
+def test_supplement_typo_id_reject_is_not_attributed_to_classmate(h):
+    """姓名對不上就不知道是誰——被擋那一筆不能歸在同學名下（tried／卡住名單都不能指向同學）。"""
+    s2 = _two_bound(h, "twobound-f")
+    pk_b = h.pk("CD", "9994A002")
+    for _ in range(2):  # 兩次才夠卡住名單的門檻，沒修之前同學乙會被列進去
+        r = _ci10(h, s2, "twobound-f-new", "9994A002", name="王小明", pin="1111", pin2="1111")
+        assert r.status_code == 400, r.text
+    with h.A.db() as con:
+        ev = con.execute("SELECT student_pk FROM events WHERE session_id=? AND kind='checkin_reject' AND reason='not_match'", (s2,)).fetchall()
+    assert len(ev) == 2 and all(e["student_pk"] is None for e in ev), [dict(e) for e in ev]
+    st = h.state(s2)
+    assert h.row(s2, "9994A002")["tried"] == "", h.row(s2, "9994A002")
+    assert all(x["pk"] != pk_b for x in st["stuck"]), st["stuck"]
+
+
+# 本人換環境再掃一次，老師頁不亮紅字
+
+def _stuck_list(h, sid, stu="9994A001"):
+    with h.A.db() as con:
+        s = h.A.get_session(con, sid)
+        return [x for x in h.A.compute_stuck(con, sid, s["opened_at"]) if x["student_id"] == stu]
+
+
+def _prior_binding(h, tag, stu="9994A001", name="學生1", pin="1234"):
+    """上週：環境 A 首綁並簽到、結束；本週開新的一場。回 (本週 sid, A 名, B 名, C 名)。"""
+    s1 = h.open("CD")
+    assert h.checkin(s1, f"{tag}-A", stu, name=name, pin=pin)["ok"]
+    h.T.post(f"/api/t/session/{s1}/close")
+    return h.open("CD"), f"{tag}-A", f"{tag}-B", f"{tag}-C"
+
+
+def test_1_rescan_in_new_environment_after_rebind_is_gray_info(h):
+    s2, a, b, c = _prior_binding(h, "prior-a")
+    assert _ci10(h, s2, b, "9994A001", pin="1234").json()["rebound"] is True
+    r = _ci10(h, s2, c, "9994A001", pin="1234")
+    assert r.status_code == 409, r.text
+    entry = _stuck_list(h, s2)
+    assert len(entry) == 1, entry
+    assert entry[0]["conflict"] is False and entry[0]["info"] is True, entry
+    assert "本人可能又掃了一次" in entry[0]["reason_label"], entry
+    assert entry[0]["reason"] == "already_recorded", entry
+
+
+def test_2_old_environment_after_rebind_is_red(h):
+    s2, a, b, c = _prior_binding(h, "prior-b")
+    assert _ci10(h, s2, b, "9994A001", pin="1234").json()["rebound"] is True
+    r = _ci10(h, s2, a, "9994A001", pin="1234")  # 機主用原本那支來，發現被改綁走了
+    assert r.status_code == 409, r.text
+    entry = _stuck_list(h, s2)
+    assert len(entry) == 1 and entry[0]["conflict"] is True, entry
+    assert "搶先改綁" in entry[0]["reason_label"], entry
+    assert not entry[0].get("info"), entry
+
+
+def test_3_signed_then_correct_pin_from_stranger_environment_is_gray(h):
+    s2 = h.open("CD")
+    assert h.checkin(s2, "prior-c-A", "9994A001", name="學生1", pin="1234")["ok"]
+    r = _ci10(h, s2, "prior-c-C", "9994A001", pin="1234")
+    assert r.status_code == 409, r.text
+    entry = _stuck_list(h, s2)
+    assert len(entry) == 1 and entry[0]["conflict"] is False and entry[0]["info"] is True, entry
+
+
+def test_4_wrong_pin_from_other_environment_stays_red(h):
+    s2 = h.open("CD")
+    assert h.checkin(s2, "prior-d-A", "9994A001", name="學生1", pin="1234")["ok"]
+    r = _ci10(h, s2, "prior-d-C", "9994A001", pin="9999")
+    assert r.status_code == 401, r.text
+    entry = _stuck_list(h, s2)
+    assert len(entry) == 1 and entry[0]["conflict"] is True and entry[0]["reason"] == "pin_wrong", entry
+
+
+def test_5_manual_row_never_goes_gray(h):
+    """手動列不含 already_recorded，所以根本不進灰群。"""
+    s2, a, b, c = _prior_binding(h, "prior-e")
+    h.T.post(f"/api/t/session/{s2}/status", data={"pk": h.pk("CD", "9994A001"), "status": "present"})
+    assert _ci10(h, s2, b, "9994A001", pin="1234").status_code == 409
+    assert _stuck_list(h, s2) == []
+
+
+def test_6_mixed_red_wins_over_gray(h):
+    """同一人既有灰（新環境打對 PIN）又有紅（PIN 打錯）：照紅輸出，不降成灰。"""
+    s2 = h.open("CD")
+    assert h.checkin(s2, "prior-f-A", "9994A001", name="學生1", pin="1234")["ok"]
+    assert _ci10(h, s2, "prior-f-C", "9994A001", pin="1234").status_code == 409
+    assert _ci10(h, s2, "prior-f-D", "9994A001", pin="9999").status_code == 401
+    entry = _stuck_list(h, s2)
+    assert len(entry) == 1 and entry[0]["conflict"] is True and not entry[0].get("info"), entry
+
+
+def test_7_template_stuck_groups(h):
+    text = (TEMPLATES / "session.html").read_text(encoding="utf-8")
+    assert '<p class="muted sm" style="margin:10px 0 4px">多半是本人，不用處理：</p>' in text  # R7：標題改成能涵蓋「新瀏覽器又掃一次」與「剛處理過又試」兩種灰字的中性說法
+    assert "x.info" in text
+
+
+# 前幾天被解除綁定的學生，PIN 打對就能綁
+
+def _unbound_yesterday(h, tag, reset=False):
+    """甲上週綁定簽到、結束；老師解除綁定（或重設），事件改成昨天；首次綁定關著；開今天的新一場。"""
+    s1 = h.open("CD")
+    assert h.checkin(s1, f"{tag}-A", "9994A001", name="學生1", pin="1234")["ok"]
+    h.T.post(f"/api/t/session/{s1}/close")
+    pk = h.pk("CD", "9994A001")
+    assert h.T.post(f"/api/t/student/{pk}/unbind", data={"reset_pin": "1" if reset else ""}).status_code == 200
+    with h.A.db() as con:
+        con.execute("UPDATE events SET ts=? WHERE kind='unbind' AND student_pk=?", (h.A.today_start() - 1, pk))
+    h.T.post(f"/api/t/course/{h.cid['CD']}/bind", data={"allow": "0"})
+    return h.open("CD")
+
+
+def _last_reject_reason(h):
+    with h.A.db() as con:
+        return con.execute("SELECT reason FROM events WHERE kind='checkin_reject' ORDER BY id DESC LIMIT 1").fetchone()["reason"]
+
+
+def test_1_unbound_earlier_day_correct_pin_binds_new_device(h):
+    s2 = _unbound_yesterday(h, "unboundy-a")
+    r = _ci10(h, s2, "unboundy-a-new", "9994A001", pin="1234")
+    assert r.status_code == 200, r.text
+    assert _dev_hash_of(h, "9994A001") == h.A.hash_device(h.dev("unboundy-a-new").cookies.get(h.A.DK_COOKIE))
+
+
+def test_2_unbound_earlier_day_wrong_pin_is_401_not_403(h):
+    s2 = _unbound_yesterday(h, "unboundy-b")
+    r = _ci10(h, s2, "unboundy-b-new", "9994A001", pin="9999")
+    assert r.status_code == 401, r.text
+    assert _last_reject_reason(h) == "pin_wrong"
+
+
+def test_3_reset_earlier_day_still_bind_closed(h):
+    s2 = _unbound_yesterday(h, "unboundy-c", reset=True)
+    r = _ci10(h, s2, "unboundy-c-new", "9994A001", name="學生1", pin="1234", pin2="1234")
+    assert r.status_code == 403, r.text
+    assert _last_reject_reason(h) == "bind_closed"
+
+
+def test_4_reset_today_still_exempt(h):
+    s1 = h.open("CD")
+    assert h.checkin(s1, "unboundy-d-A", "9994A001", name="學生1", pin="1234")["ok"]
+    h.T.post(f"/api/t/session/{s1}/close")
+    assert h.T.post(f"/api/t/student/{h.pk('CD', '9994A001')}/unbind", data={"reset_pin": "1"}).status_code == 200
+    h.T.post(f"/api/t/course/{h.cid['CD']}/bind", data={"allow": "0"})
+    s2 = h.open("CD")
+    r = _ci10(h, s2, "unboundy-d-new", "9994A001", name="學生1", pin="5555", pin2="5555")
+    assert r.status_code == 200, r.text
+
+
+def test_5_revoked_today_wins_over_bind_closed(h):
+    """今天綁定場次判不在（PIN 一併清掉）、首次綁定關著：說的是 bind_revoked，不是 bind_closed。"""
+    sid = h.open("CD", kind="bind")
+    assert h.checkin(sid, "unboundy-e-A", "9994A001", name="學生1", pin="9999")["ok"] is True
+    pick = h.T.post(f"/api/t/session/{sid}/spotcheck").json()["picks"][0]
+    assert h.T.post(f"/api/t/spotcheck/{pick['id']}", data={"present": "0"}).json()["unbound"] is True
+    h.T.post(f"/api/t/session/{sid}/close")
+    h.T.post(f"/api/t/course/{h.cid['CD']}/bind", data={"allow": "0"})
+    s2 = h.open("CD")
+    r = _ci10(h, s2, "unboundy-e-new", "9994A001", name="學生1", pin="1234", pin2="1234")
+    assert r.status_code == 403, r.text
+    assert _last_reject_reason(h) == "bind_revoked"
+
+
+# 姓名不符不歸到同學、綁定場次提示、重綁旗標
+# 假學號用 999 開頭；每個測試用獨一無二的裝置名稱。
+
+def _add_rows(h, rows):
+    with h.A.db() as con:
+        for stu, nm in rows:
+            con.execute("INSERT INTO students(course_id,student_id,name,cls) VALUES(?,?,?,?)", (h.cid["CD"], stu, nm, ""))
+
+
+def _reject_pks(h, sid, reason=None):
+    q, a = "SELECT reason, student_pk FROM events WHERE session_id=? AND kind='checkin_reject'", [sid]
+    if reason:
+        q += " AND reason=?"
+        a.append(reason)
+    with h.A.db() as con:
+        return [dict(r) for r in con.execute(q + " ORDER BY id", a)]
+
+
+def _variant_pair(h, tag, sign_b=True, pin_a="1111", pin_b="2222"):
+    """甲（999000001 王測甲）、乙（999000002 王測乙）各自綁定並設 PIN、結束；開新的一場，乙視需要先簽到。回 sid。"""
+    _add_rows(h, [("999000001", "王測甲"), ("999000002", "王測乙")])
+    s1 = h.open("CD")
+    assert h.checkin(s1, f"{tag}-甲", "999000001", name="王測甲", pin=pin_a)["ok"]
+    assert h.checkin(s1, f"{tag}-乙", "999000002", name="王測乙", pin=pin_b)["ok"]
+    h.T.post(f"/api/t/session/{s1}/close")
+    s2 = h.open("CD")
+    if sign_b:
+        assert h.checkin(s2, f"{tag}-乙", "999000002", name="王測乙", pin=pin_b)["ok"]
+    return s2
+
+
+def test_1_variant_wrong_pin_not_attributed_but_pin_fail_counted(h):
+    s2 = _variant_pair(h, "variant-a")
+    r = _ci10(h, s2, "variant-a-new", "999000002", name="王測甲", pin="9999", pin2="")
+    assert r.status_code == 401, r.text
+    assert r.json()["error"] == "PIN 錯誤，剩 2 次。先確認學號沒打錯；忘記了請找老師重設", r.text
+    ev = _reject_pks(h, s2, "pin_wrong")
+    assert len(ev) == 1 and ev[0]["student_pk"] is None, ev
+    assert _stuck_list(h, s2, "999000002") == [], _stuck_list(h, s2, "999000002")
+    rows = [x for x in _pin_fail_rows(h, "999000002") if x["device_hash"] != ""]
+    assert len(rows) == 1 and rows[0]["n"] == 1, [dict(x) for x in _pin_fail_rows(h, "999000002")]
+
+
+def test_2_variant_with_matching_pin_becomes_pending_name_variant(h):
+    s2 = _variant_pair(h, "variant-b", sign_b=False)
+    r = _ci10(h, s2, "variant-b-new", "999000002", name="王測甲", pin="2222", pin2="")
+    assert r.status_code == 200, r.text
+    j = r.json()
+    assert j["status"] == "待確認" and j["pending_reason"] == "name_variant", j
+    row = h.db_rows(s2)["999000002"]
+    flags = json.loads(row["flags"])
+    assert row["status"] == "pending" and "name_variant" in flags and "rebind" in flags, row
+
+
+def test_3_owner_with_exact_name_still_present(h):
+    s2 = _variant_pair(h, "variant-c", sign_b=False)
+    r = _ci10(h, s2, "variant-c-new", "999000002", name="王測乙", pin="2222", pin2="")
+    assert r.status_code == 200, r.text
+    assert r.json()["status"] == "出席", r.text
+    assert "name_variant" not in json.loads(h.db_rows(s2)["999000002"]["flags"])
+
+
+def test_4_claimed_pk_only_exact_name_counts(h):
+    s2 = _variant_pair(h, "variant-d", sign_b=False)
+    assert h.A._claimed_pk(s2, "999000002", "王測甲") is None
+    assert h.A._claimed_pk(s2, "999000002", "王測乙") == h.pk("CD", "999000002")
+
+
+def test_5_variant_wrong_pins_still_lock_the_device(h):
+    s2 = _variant_pair(h, "variant-e", sign_b=False)
+    for p in ("9991", "9992", "9993"):
+        assert _ci10(h, s2, "variant-e-new", "999000002", name="王測甲", pin=p, pin2="").status_code == 401
+    r = _ci10(h, s2, "variant-e-new", "999000002", name="王測甲", pin="2222", pin2="")
+    assert r.status_code == 423, r.text
+
+
+# 姓名對不上，被擋那一筆不歸到那個學號（不論擋在哪一關）
+
+def _mismatch_pair(h):
+    _add_rows(h, [("999000001", "王測甲"), ("999000002", "李測乙")])
+    return h.open("CD")
+
+
+def test_1_first_time_name_mismatch_not_attributed(h):
+    sid = _mismatch_pair(h)
+    for _ in range(2):
+        r = _ci10(h, sid, "dev5a-new", "999000002", name="王測甲", pin="1234", pin2="1234")
+        assert r.status_code == 400 and "名冊不符" in r.json()["error"], r.text
+    ev = _reject_pks(h, sid, "not_match")
+    assert len(ev) == 2 and all(e["student_pk"] is None for e in ev), ev
+    assert all(x["student_id"] != "999000002" for x in h.state(sid)["stuck"])
+    h.T.post(f"/api/t/session/{sid}/close")
+    assert h.row(sid, "999000002")["tried"] == "", h.row(sid, "999000002")
+
+
+def test_2_short_pin_with_wrong_name_says_not_match(h):
+    sid = _mismatch_pair(h)
+    r = _ci10(h, sid, "dev5b-new", "999000002", name="王測甲", pin="12", pin2="12")
+    assert r.status_code == 400 and "名冊不符" in r.json()["error"], r.text
+    assert all(e["student_pk"] is None for e in _reject_pks(h, sid))
+
+
+def test_3_bind_closed_course_says_not_match_not_403(h):
+    sid = _mismatch_pair(h)
+    h.T.post(f"/api/t/course/{h.cid['CD']}/bind", data={"allow": "0"})
+    r = _ci10(h, sid, "dev5c-new", "999000002", name="王測甲", pin="1234", pin2="1234")
+    assert r.status_code == 400 and "名冊不符" in r.json()["error"], r.text
+    assert all(e["student_pk"] is None for e in _reject_pks(h, sid))
+
+
+def test_4_revoked_today_says_not_match_for_wrong_name(h):
+    _add_rows(h, [("999000001", "王測甲"), ("999000002", "李測乙")])
+    bs = h.open("CD", kind="bind")
+    assert h.checkin(bs, "dev5d-乙", "999000002", name="李測乙", pin="2222")["ok"]
+    pick = h.T.post(f"/api/t/session/{bs}/spotcheck").json()["picks"][0]
+    assert h.T.post(f"/api/t/spotcheck/{pick['id']}", data={"present": "0"}).json()["unbound"] is True
+    r = _ci10(h, bs, "dev5d-new", "999000002", name="王測甲", pin="1234", pin2="1234")
+    assert r.status_code == 400 and "名冊不符" in r.json()["error"], r.text
+    assert all(e["student_pk"] is None for e in _reject_pks(h, bs, "not_match"))
+
+
+def test_5_pin_only_mode_empty_name_unchanged(h):
+    sid = _mismatch_pair(h)
+    r = _ci10(h, sid, "dev5e-new", "999000002", name="", pin="1234", pin2="")
+    assert r.status_code == 400 and "名冊不符" in r.json()["error"], r.text  # 空姓名在首次分支照舊回名冊不符
+
+
+def test_6_bound_device_one_tap_ignores_name(h):
+    _add_rows(h, [("999000002", "李測乙")])
+    s1 = h.open("CD")
+    assert h.checkin(s1, "dev5f-乙", "999000002", name="李測乙", pin="2222")["ok"]
+    h.T.post(f"/api/t/session/{s1}/close")
+    s2 = h.open("CD")
+    r = _ci10(h, s2, "dev5f-乙", "999000002", name="亂打的名字", pin="", pin2="")
+    assert r.status_code == 200, r.text
+
+
+# 綁定場次的 409 與已簽到橫幅
+
+def _bind_session_setup(h, tag, kind):
+    _add_rows(h, [("999000001", "王測甲")])
+    s0 = h.open("CD")
+    assert h.checkin(s0, f"{tag}-A", "999000001", name="王測甲", pin="1234")["ok"]
+    h.T.post(f"/api/t/session/{s0}/close")
+    s2 = h.open("CD", kind=kind)
+    assert _ci10(h, s2, f"{tag}-B", "999000001", pin="1234").json()["rebound"] is True
+    return s2
+
+
+def _land_html(h, sid, dev):
+    code = h.T.get(f"/api/t/session/{sid}/qr").json()["code"]
+    return h.dev(dev).post("/c", data={"code": code}).text
+
+
+def test_1_bind_session_409_and_banner(h):
+    s2 = _bind_session_setup(h, "bindsess-a", "bind")
+    r = _ci10(h, s2, "bindsess-a-C", "999000001", pin="1234")
+    assert r.status_code == 409, r.text
+    err = r.json()["error"]
+    assert "只做綁定、不算出缺勤" in err and "（出席）" not in err, err
+    assert err == ("這個學號這一場已經綁定過了（另一個瀏覽器或老師記的）。這一場只做綁定、不算出缺勤；今天還沒簽到成功的，請找老師補登。"
+                   "不是你本人、或紀錄不對，現在就舉手找老師。")
+    html = _land_html(h, s2, "bindsess-a-B")
+    assert "這一場已經綁定了" in html and "請找老師補登" in html and "出席（" not in html and "這一場已經簽到了" not in html, html[-2500:]
+
+
+def test_2_normal_session_texts_unchanged(h):
+    s2 = _bind_session_setup(h, "bindsess-b", "normal")
+    r = _ci10(h, s2, "bindsess-b-C", "999000001", pin="1234")
+    assert r.status_code == 409 and "已經有紀錄（出席）" in r.json()["error"], r.text
+    html = _land_html(h, s2, "bindsess-b-B")
+    assert "這一場已經簽到了" in html and "這一場已經綁定了" not in html
+
+
+# 解除綁定後靠 PIN 綁上要留旗標
+
+def test_unbound_then_pin_bind_leaves_rebind_flag(h):
+    _add_rows(h, [("999000001", "王測甲")])
+    s1 = h.open("CD")
+    assert h.checkin(s1, "dev6-A", "999000001", name="王測甲", pin="1234")["ok"]
+    assert "rebind" not in json.loads(h.db_rows(s1)["999000001"]["flags"]), "首次綁定（沒設過 PIN）不加 rebind"
+    h.T.post(f"/api/t/session/{s1}/close")
+    assert h.T.post(f"/api/t/student/{h.pk('CD', '999000001')}/unbind", data={"reset_pin": ""}).status_code == 200
+    s2 = h.open("CD")
+    r = _ci10(h, s2, "dev6-B", "999000001", pin="1234")
+    assert r.status_code == 200 and r.json().get("rebound") is True, r.text
+    assert "rebind" in json.loads(h.db_rows(s2)["999000001"]["flags"])
+    with h.A.db() as con:
+        ev = con.execute("SELECT reason FROM events WHERE session_id=? AND kind='rebind'", (s2,)).fetchall()
+    assert [e["reason"] for e in ev] == [""], [dict(e) for e in ev]
+    assert _ci10(h, s2, "dev6-C", "999000001", pin="1234").status_code == 409
+    entry = _stuck_list(h, s2, "999000001")
+    assert len(entry) == 1 and entry[0]["conflict"] is False and entry[0]["info"] is True, entry
+
+
+# 只輸 PIN 之後同姓同字數的打錯仍歸到同學
+# 前端切成只輸 PIN 後 name 是空字串，另帶 name_hint（切換前表單上打的姓名）。
+
+def _pin_only_post(h, sid, dev, stu, pin, name="", name_hint=None, pin2="", grant=None):
+    cl = h.dev(dev)
+    data = {"grant": grant or h.grant(sid, cl), "student_id": stu, "name": name, "pin": pin, "pin2": pin2, "hints": "h"}
+    if name_hint is not None:
+        data["name_hint"] = name_hint
+    return cl.post("/api/checkin", data=data, headers={"user-agent": "iPhone", "cf-connecting-ip": "140.131.1.1"})
+
+
+def test_1_pin_only_with_variant_hint_not_attributed(h):
+    s2 = _variant_pair(h, "pinonly-a")
+    r1 = _ci10(h, s2, "pinonly-a-new", "999000002", name="王測甲", pin="9999", pin2="9999")
+    assert r1.status_code == 401 and "已經設過 PIN" in r1.json()["error"], r1.text
+    r2 = _pin_only_post(h, s2, "pinonly-a-new", "999000002", "9998", name="", name_hint="王測甲")  # 換一組錯 PIN：同一組 60 秒內重送不重複計
+    assert r2.status_code == 401 and r2.json()["error"].startswith("PIN 錯誤，剩 1 次"), r2.text
+    ev = _reject_pks(h, s2)
+    assert len(ev) == 2 and all(e["student_pk"] is None for e in ev), ev
+    assert _stuck_list(h, s2, "999000002") == [], _stuck_list(h, s2, "999000002")
+    rows = [x for x in _pin_fail_rows(h, "999000002") if x["device_hash"] != ""]
+    assert len(rows) == 1 and rows[0]["n"] == 2, [dict(x) for x in _pin_fail_rows(h, "999000002")]
+
+
+def test_2_pin_only_variant_hint_matching_pin_becomes_pending(h):
+    s2 = _variant_pair(h, "pinonly-b", sign_b=False)
+    r1 = _ci10(h, s2, "pinonly-b-new", "999000002", name="王測甲", pin="9999", pin2="9999")
+    assert r1.status_code == 401, r1.text
+    r2 = _pin_only_post(h, s2, "pinonly-b-new", "999000002", "2222", name="", name_hint="王測甲")
+    assert r2.status_code == 200, r2.text
+    j = r2.json()
+    assert j["status"] == "待確認" and j["pending_reason"] == "name_variant", j
+    flags = json.loads(h.db_rows(s2)["999000002"]["flags"])
+    assert "rebind" in flags and "name_variant" in flags, flags
+
+
+def test_3_pin_only_with_exact_hint_is_present(h):
+    s2 = _variant_pair(h, "pinonly-c", sign_b=False)
+    r = _pin_only_post(h, s2, "pinonly-c-new", "999000002", "2222", name="", name_hint="王測乙")
+    assert r.status_code == 200 and r.json()["status"] == "出席", r.text
+    assert "name_variant" not in json.loads(h.db_rows(s2)["999000002"]["flags"])
+
+
+def test_4_LIMITATION_pin_only_without_hint_old_frontend_still_attributed(h):
+    """記錄限制，不是期望的好行為：舊前端（沒帶 name_hint）只輸 PIN 被擋，事件仍歸到乙。"""
+    s2 = _variant_pair(h, "pinonly-d")
+    r = _pin_only_post(h, s2, "pinonly-d-new", "999000002", "9999", name="")
+    assert r.status_code == 401, r.text
+    ev = _reject_pks(h, s2, "pin_wrong")
+    assert len(ev) == 1 and ev[0]["student_pk"] == h.pk("CD", "999000002"), ev
+
+
+def test_5_pin_only_hint_different_surname_not_attributed(h):
+    s2 = _variant_pair(h, "pinonly-e")
+    r = _pin_only_post(h, s2, "pinonly-e-new", "999000002", "9999", name="", name_hint="李四方")
+    assert r.status_code == 401, r.text
+    ev = _reject_pks(h, s2, "pin_wrong")
+    assert len(ev) == 1 and ev[0]["student_pk"] is None, ev
+
+
+def test_6_rejected_before_roster_lookup_uses_hint_for_attribution(h):
+    s2 = _variant_pair(h, "pinonly-f")
+    cl = h.dev("pinonly-f-new")
+    g = h.grant(s2, cl)
+    h.T.post(f"/api/t/session/{s2}/close")
+    r1 = _pin_only_post(h, s2, "pinonly-f-new", "999000002", "9999", name="", name_hint="王測甲", grant=g)
+    assert r1.status_code == 410, r1.text
+    r2 = _pin_only_post(h, s2, "pinonly-f-new", "999000002", "9999", name="", name_hint="王測乙", grant=g)
+    assert r2.status_code == 410, r2.text
+    ev = _reject_pks(h, s2, "closed")
+    assert [e["student_pk"] for e in ev] == [None, h.pk("CD", "999000002")], ev
+
+
+def test_7_first_time_branch_ignores_hint_unchanged(h):
+    s2 = _variant_pair(h, "pinonly-g", sign_b=False)
+    with h.A.db() as con:
+        con.execute("UPDATE students SET pin_hash=NULL WHERE id=?", (h.pk("CD", "999000002"),))
+    r = _pin_only_post(h, s2, "pinonly-g-new", "999000002", "1234", name="", name_hint="王測乙")
+    assert r.status_code == 400 and "名冊不符" in r.json()["error"], r.text
+
+
+def test_8_pin_only_with_hint_still_locks_after_three_wrong(h):
+    s2 = _variant_pair(h, "pinonly-h", sign_b=False)
+    for p in ("9991", "9992", "9993"):
+        assert _pin_only_post(h, s2, "pinonly-h-new", "999000002", p, name="", name_hint="王測甲").status_code == 401
+    r = _pin_only_post(h, s2, "pinonly-h-new", "999000002", "2222", name="", name_hint="王測甲")
+    assert r.status_code == 423, r.text

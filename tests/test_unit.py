@@ -2,6 +2,7 @@
 import importlib
 import os
 import sqlite3
+import threading
 import time
 from hypothesis import HealthCheck, given, settings, strategies as st
 
@@ -15,6 +16,13 @@ def test_token_roundtrip_and_tamper(A):
     assert A.read_token(A.make_token("g", "1", "x", exp=time.time() - 1), 3) is None
 
 
+def test_hash_pin_known_answer(A):
+    """已知答案：PBKDF2-HMAC-SHA256、60 萬次迭代。10/17 用 app 與標準函式庫 hashlib.pbkdf2_hmac 各算一次相符。
+    突變測試 mutmut_11（改迭代次數）原本存活——只比「同一個 PIN 算兩次相等」抓不到演算法參數被改；
+    參數一改，正式站既有學生的 PIN 雜湊全部對不上，所有人都會被當成打錯 PIN。"""
+    assert A.hash_pin("1234", "abcd") == "e282187b2e69b8cf98f61a25705cf043308dc6ff9c644277e9c4f08434550c92"
+
+
 @given(st.text(min_size=0, max_size=40))
 @settings(max_examples=200, deadline=None, suppress_health_check=[HealthCheck.function_scoped_fixture])
 def test_read_token_never_raises(A, s):
@@ -24,8 +32,9 @@ def test_read_token_never_raises(A, s):
 @given(st.floats(min_value=1_600_000_000, max_value=2_000_000_000), st.integers(5, 60), st.integers(0, 150))
 @settings(max_examples=300, deadline=None, suppress_health_check=[HealthCheck.function_scoped_fixture])
 def test_current_slots_boundary(A, t, iv, grace):
-    # grace 不夾在 qr_interval 以內：往前第 j 片在「該片結束後 grace 秒內」仍有效，grace 可以跨好幾片；
-    # 一旦某片不合格，更舊的片子也不該出現。斷言照 current_slots 文件字串的語意寫，不照抄實作。
+    # grace 不再夾在 qr_interval 以內，斷言改成新的上限語意——往前第 j 片在「該片結束後
+    # grace 秒內」仍有效，grace 可以跨好幾片；一旦某片不合格，更舊的片子也不該出現（測試依據：
+    # app.py current_slots 文件字串「該片結束後 grace 秒內仍算數」，非照抄實作行數）。
     real_now = A.now
     A.now = lambda: t
     try:
@@ -49,6 +58,48 @@ def test_current_slots_boundary(A, t, iv, grace):
             break
         j += 1
     assert len(A.code6(A.slot_sig(sess, cur))) == 6 and A.code6(A.slot_sig(sess, cur)).isdigit()
+
+
+def test_throttle_thread_safe_dict_iteration(A):
+    """_throttle 走訪 bucket.items() 時，另一條執行緒同時插入新鍵會撞
+    `RuntimeError: dictionary changed size during iteration`（單 worker 多執行緒前提下，
+    背景發 Discord／log_event 等都可能跟主執行緒同時碰同一個限流字典）。用一個 items() 逐項
+    yield、每項之間刻意 sleep 一下的 dict 子類別放大競態視窗，兩條執行緒同時反覆呼叫
+    `_throttle`；修好後（模組層 `_throttle_lock` 把整個函式體序列化）2 秒內應該 0 次例外。
+    這裡的固定時間窗只是給競態視窗一個機會，不是在猜某個操作要花多久（符合鐵則 6 的例外：
+    測的就是多執行緒行為本身）。"""
+
+    class SlowDict(dict):
+        def items(self):
+            # 🔴 不能先用 list(...) 拍一張快照——那樣就不會再撞見別的執行緒插入新鍵；
+            # 要直接包住底層活的 dict_items 迭代器，讓每次 next() 真的去檢查 dict 有沒有被改過。
+            it = dict.items(self)
+            for kv in it:
+                time.sleep(0.001)
+                yield kv
+
+    bucket = SlowDict()
+    errors = []
+    stop = threading.Event()
+
+    def hammer(prefix):
+        i = 0
+        while not stop.is_set():
+            try:
+                A._throttle(bucket, f"{prefix}{i}", 1000, 60)
+            except RuntimeError as e:
+                errors.append(e)
+                return
+            i += 1
+
+    threads = [threading.Thread(target=hammer, args=(p,)) for p in ("a", "b")]
+    for t in threads:
+        t.start()
+    time.sleep(2)
+    stop.set()
+    for t in threads:
+        t.join(timeout=5)
+    assert errors == [], f"多執行緒同時碰 bucket 出現例外：{errors}"
 
 
 def test_client_ip_trust(A):
@@ -109,13 +160,16 @@ def test_discord_post_network_error(A, monkeypatch):
     A.DISCORD_TOKEN = "x"
     assert A.discord_post("", "hi")[0] is False
     monkeypatch.setattr(urllib.request, "urlopen", lambda *a, **k: (_ for _ in ()).throw(OSError("boom")))
-    ok, msg = A.discord_post("1", "hi"); assert ok is False and "boom" in msg
+    ok, msg = A.discord_post("1", "hi")
+    # 訊息是中文、帶例外類別名稱、不含例外原文
+    assert ok is False and msg == "Discord 發送失敗（OSError）" and "boom" not in msg
 
 
 def test_grant_and_code_helpers(A):
     dh16 = A.hash_device("some-device-key")[:16]
     g = A.grant_for(7, {"grant_seconds": 60}, dh16)
-    # grant 共五段：g, sid, nonce, 發證時間, 裝置雜湊前 16 碼
+    # grant 帶發證時間與裝置雜湊前 16 碼，共 5 段
+    # （g, sid, nonce, issued, dh16）
     parts = A.read_token(g, 5)
     assert parts[:2] == ["g", "7"] and parts[4] == dh16
     assert A.grant_for(7, {"grant_seconds": 60}, dh16) != g
@@ -152,7 +206,7 @@ def test_migrate_legacy_cookie_reissues_new_name_and_deletes_old(A, monkeypatch)
 
 
 def test_effective_device_key_legacy_paths(A, monkeypatch):
-    """effective_device_key 的舊名分支：格式不合法忽略、已綁採用（con 有給就沿用它、
+    """effective_device_key 的舊名分支——格式不合法忽略、已綁採用（con 有給就沿用它、
     沒給就臨時開一條）、未綁忽略。四條分支都要在被算進覆蓋率的檔案裡至少踩過一次。"""
     class _FR:
         def __init__(self, cookies):
@@ -188,7 +242,7 @@ def test_migrate_legacy_cookie_noop_when_new_name_already_present(A, monkeypatch
 
 
 def test_sessions_kind_voided_migration_preserves_data(tmp_path):
-    """已上線的資料庫有既有資料，起動時只能用 PRAGMA table_info 檢查後 ALTER TABLE 補欄位，
+    """正式站有既有資料，起動時只能用 PRAGMA table_info 檢查後 ALTER TABLE 補欄位，
     不能要求重建資料庫。這裡手刻一份沒有 kind／voided_at 的「舊」sessions/courses 表，
     塞一筆既有場次，再讓 app 用這份資料庫開機，驗遷移後：欄位補上了、既有場次視為一般場次
     （kind='normal'、voided_at IS NULL），且原本的欄位值（含 closed_at／teacher_ip）都還在。"""
@@ -228,12 +282,12 @@ def test_every_template_compiles(A):
         A.templates.env.get_template(n)
 
 
-# 名冊副檔名不得混入版控與映像
+# 名冊副檔名不得混入版控／映像
 
 def _service_dir_if_real_checkout():
     """mutmut 的 mutants/ 沙箱只複製原始碼（app.py／manage.py／templates／static／tests），
-    不含 .git、.gitignore、.dockerignore。下面兩條測試驗的是專案根目錄的檔案，沙箱裡沒有
-    對象可驗，這時回傳 None 讓測試跳過。"""
+    不含 .git、.gitignore、.dockerignore；這裡的測試驗的是專案根目錄的檔案，在沙箱裡沒有
+    對象可驗，跳過即可（不是放寬檢查，是這條規則在沙箱裡本來就不適用）。"""
     import subprocess
     from pathlib import Path
 
@@ -248,7 +302,7 @@ def _service_dir_if_real_checkout():
 
 
 def test_gitignore_and_dockerignore_exclude_roster_extensions():
-    """名冊可能被直接放在專案根目錄（例如 roster.csv），data/ 的排除規則管不到那裡；
+    """有人會把名冊直接放在服務根目錄（例如 roster.csv），data/ 的排除規則管不到那裡；
     名冊含真實學生學號姓名，兩個忽略清單都要擋住常見的名冊副檔名。這裡用假檔名驗證規則本身
     （不讀、不建立任何真實名冊內容），不真的跑 docker build。"""
     import fnmatch
@@ -260,7 +314,7 @@ def test_gitignore_and_dockerignore_exclude_roster_extensions():
         pytest.skip("不在真實的 git 檢出目錄（例如 mutmut 沙箱），沒有 .gitignore／.dockerignore 可驗")
     fake_names = ["roster.csv", "roster.xls", "roster.xlsx", "students.csv"]
 
-    # .gitignore：用 git check-ignore 驗
+    # .gitignore：用 git check-ignore 驗（服務目錄本身在版控內）
     for name in fake_names:
         r = subprocess.run(
             ["git", "check-ignore", "-q", "--", name],
@@ -281,8 +335,8 @@ def test_gitignore_and_dockerignore_exclude_roster_extensions():
 
 
 def test_no_roster_csv_or_excel_tracked_in_git():
-    """版控裡不得有任何名冊類 csv／xls／xlsx 被追蹤。忽略規則只對還沒追蹤的檔案有效，
-    已經被追蹤的檔案要另外檢查，發現了得由人決定怎麼處理。"""
+    """先確認版控裡目前沒有任何名冊 csv／xls／xlsx 被追蹤——這條規則是「加排除規則」，
+    不是「事後清歷史」，若已有被追蹤的檔案代表情況不一樣，要停下來回報而不是自動處理。"""
     import subprocess
     import pytest
 
@@ -294,4 +348,14 @@ def test_no_roster_csv_or_excel_tracked_in_git():
         cwd=service_dir, capture_output=True, text=True, check=True,
     )
     tracked = [line for line in r.stdout.splitlines() if line.lower().endswith((".csv", ".xls", ".xlsx"))]
-    assert tracked == [], f"已有名冊類檔案被 git 追蹤（.gitignore 管不到已追蹤的檔案）：{tracked}"
+    assert tracked == [], f"已有名冊類檔案被 git 追蹤，需要人工判斷而非自動排除：{tracked}"
+
+
+# 姓名比對不分大小寫、不去間隔號
+
+def test_name_matches_casefold_and_middle_dots(A):
+    assert A.name_matches("smith john", "SMITH JOHN") == "exact"
+    assert A.name_matches("瓦旦測試", "瓦旦·測試") == "exact"
+    for dot in ("·", "‧", "・", "•", "."):
+        assert A.name_matches("瓦旦測試", f"瓦旦{dot}測試") == "exact", repr(dot)
+    assert A.name_matches("王測甲", "王測乙") == "variant"

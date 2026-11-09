@@ -17,7 +17,9 @@ def dev(name):  # 一支手機＝一個保留 cookie 的 session（識別由伺�
         _devs[name] = requests.Session(); _devs[name].get(f"{B}/c")
     return _devs[name]
 def grant(c, d="x"): return re.search(r'GRANT="([^"]+)"', dev(d).post(f"{B}/c", data={"code": c}).text).group(1)
-def sign(g, d, stu, name): return dev(d).post(f"{B}/api/checkin", data={"grant": g, "student_id": stu, "name": name, "pin": "1234", "pin2": "1234"}).json()
+# 同指紋（IP＋UA＋語言）的另一個學號會被轉待確認；每支模擬手機各給自己的 UA（現實裡是不同手機）
+def sign(g, d, stu, name): return dev(d).post(f"{B}/api/checkin", data={"grant": g, "student_id": stu, "name": name, "pin": "1234", "pin2": "1234"},
+                                              headers={"user-agent": f"iPhone/{d}"}).json()
 # QR 輪換：等到一片剛開始，拿碼，等 14 秒仍可用（10 秒＋5 秒容許），等到 16 秒不可用
 while code()["remain"] < 9: time.sleep(0.2)
 c = code()["code"]; t = time.time()
@@ -25,14 +27,14 @@ time.sleep(13.5); r = requests.post(f"{B}/c", data={"code": c}); check(r.status_
 while code()["remain"] < 9: time.sleep(0.2)
 c = code()["code"]; t = time.time(); time.sleep(16); r = requests.post(f"{B}/c", data={"code": c}); check(r.status_code == 400, f"碼在第 {time.time()-t:.1f} 秒失效")
 # 開場簽到（grant 過期在 test_api 用假時間測）
-j = sign(grant(code()["code"], "a"), "a", "9994A001", "陳大文"); check(j["status"] == "出席", f"開場 {time.time()-t0:.0f} 秒簽到＝出席")
+j = sign(grant(code()["code"], "a"), "a", "9994A001", "蘇虛一"); check(j["status"] == "出席", f"開場 {time.time()-t0:.0f} 秒簽到＝出席")
 # 等出席窗過（1 分鐘）
 time.sleep(max(0, 62 - (time.time() - t0)))
 st = T.get(f"{B}/api/t/session/{sid}/state").json(); check(st["phase"] == "late", f"{time.time()-t0:.0f} 秒 phase=late")
-j = sign(grant(code()["code"], "b"), "b", "9994A002", "吳家豪"); check(j["status"] == "遲到", f"{time.time()-t0:.0f} 秒簽到＝遲到")
+j = sign(grant(code()["code"], "b"), "b", "9994A002", "傅構二"); check(j["status"] == "遲到", f"{time.time()-t0:.0f} 秒簽到＝遲到")
 # 遲到區按延長：只延遲到窗，不重開出席窗（晚到的人不會反而拿到出席）
 r = T.post(f"{B}/api/t/session/{sid}/extend", data={"minutes": 1}).json(); st = T.get(f"{B}/api/t/session/{sid}/state").json(); check(r["phase"] == "late" and st["phase"] == "late", "遲到區延長後仍在遲到區")
-j = sign(grant(code()["code"], "c"), "c", "9994A003", "林小華"); check(j["status"] == "遲到", "延長期間簽到＝遲到")
+j = sign(grant(code()["code"], "c"), "c", "9994A003", "林擬三"); check(j["status"] == "遲到", "延長期間簽到＝遲到")
 # 等到遲到窗也過（原 2 分鐘＋延長 1 分鐘）
 while T.get(f"{B}/api/t/session/{sid}/state").json()["phase"] != "closed":
     time.sleep(2)

@@ -40,6 +40,6 @@ from locust import events
 def _gate(environment, **kw):
     s = environment.stats.get("/api/checkin", "POST")
     fail = environment.stats.total.num_failures
-    # 首簽成功率門檻：5xx 或連線失敗超過 1% 就讓程序以非零離開（4xx 在 locust 預設也算 failure，所以名冊人數要 ≥ 模擬人數 -u）
+    # 首簽成功率門檻：5xx 或連線失敗超過 1% 就讓程序以非零離開（4xx 在 locust 預設也算 failure，所以名冊要 ≥ 使用者數）
     if s.num_requests and fail / max(1, environment.stats.total.num_requests) > 0.01:
         environment.process_exit_code = 1

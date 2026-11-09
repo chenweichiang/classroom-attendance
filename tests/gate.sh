@@ -1,10 +1,10 @@
 #!/bin/bash
-# 一鍵測試閘門。全部在暫存資料庫／本機動態選埠，不碰正式資料。
+# 一鍵測試閘門（取代 tests/run_all.sh）。全部在暫存資料庫／本機動態選埠，不碰正式資料。
 # 用法：tests/gate.sh [--quick|--full] [--only 層名,層名]
 #   --quick（預設）：static unit state scenario fuzz e2e e2e-edge e2e-friction e2e-teacher
 #   --full         ：上面全部 + realtime load rehearsal flaky
-#   --only         ：只跑指定層（逗號分隔），忽略 --quick/--full 的層清單（層名同上；state／rehearsal
-#                     找不到測試檔時印「略過：檔案不存在」並計為失敗，不會靜默跳過）
+#   --only         ：只跑指定層（逗號分隔），忽略 --quick/--full 的層清單（層名同上，state／rehearsal
+#                     若對應測試檔還不存在會印「略過：檔案不存在」並計為失敗，不會偷偷跳過不算數）
 # 每層：獨立計時、獨立 log（/tmp/attend-gate/<層名>.log）、終端機只印一行結果，失敗才印該 log 最後 15 行。
 # 最後印總表（層名｜結果｜秒數）。exit code：全部通過＝0，有任何一層失敗＝1。
 # 突變測試（mutmut）刻意不在這裡——太慢，另見 tests/mutation.sh。
@@ -13,8 +13,8 @@ cd "$(dirname "$0")/.."
 
 PY=.venv/bin/python
 if [ ! -x "$PY" ]; then
-  # 合成名冊與每一層都要用它，缺了第一步就會失敗，先講清楚缺什麼
-  echo "缺測試用虛擬環境 $PY，無法執行測試閘門。" >&2
+  # 合成名冊與每一層都要用它，缺了第一步就會失敗；先講清楚
+  echo "缺測試用虛擬環境 ${PY}，無法執行測試閘門。" >&2
   echo "建法見 tests/README.md：uv venv .venv 後 uv pip install -p .venv/bin/python -r requirements.txt -r tests/requirements-dev.lock" >&2
   exit 1
 fi
@@ -22,13 +22,13 @@ LOGDIR=/tmp/attend-gate
 ROSTER=tests/fixtures/roster.csv
 mkdir -p "$LOGDIR" tests/fixtures
 
-# 合成名冊（沒有才建；學號 9994A001–A048 跳過 A018，共 47 人）
+# 合成名冊（沒有才建，跟原 run_all.sh 一樣的 48 人份）
 if [ ! -f "$ROSTER" ]; then
   $PY - <<'PYEOF'
 import csv
 with open("tests/fixtures/roster.csv", "w", newline="") as f:
     w = csv.writer(f); w.writerow(["student_id", "name", "class"])
-    names = ["陳大文", "吳家豪", "林小華", "張志明"] + [f"測試{n}" for n in range(5, 49)]
+    names = ["蘇虛一", "傅構二", "林擬三", "涂演四"] + [f"測試{n}" for n in range(5, 49)]
     [w.writerow([f"9994A{n:03d}", names[n - 1], "測試班"]) for n in range(1, 49) if n != 18]
 PYEOF
 fi
@@ -55,8 +55,9 @@ else
   LAYERS="$QUICK_LAYERS"
 fi
 
-# 先決條件：缺 curl 時伺服器其實有正常啟動，只是健康探測一律失敗，訊息卻只會印「伺服器啟動失敗」，
-# 讓人去查程式而不是查環境。這裡先講清楚缺什麼、怎麼裝，直接以非零離開碼結束。
+# 先決條件：缺這些指令時，起伺服器的健康探測會一律失敗，訊息卻只會印「伺服器啟動失敗」
+#    （缺 curl 時伺服器其實有正常啟動，只是探測不到而已，會誤導人去查
+#    程式而不是查環境）。這裡先講清楚缺什麼、怎麼裝，直接以非零離開碼結束，不要走到那一步──
 need_load_layer=0
 for l in $LAYERS; do [ "$l" = "load" ] && need_load_layer=1; done
 missing=()
@@ -70,7 +71,8 @@ if [ ${#missing[@]} -gt 0 ]; then
   exit 1
 fi
 
-# 動態選一個空埠，避開別的行程佔用：寫死的埠被別的行程佔走時，後面幾層會全部沒跑，也不容易發現
+# 動態選一個空埠，避開別的行程佔用（寫死埠號時，埠被別的行程佔走，
+#    第 4 層以後會全部沒跑而且沒人發現）──
 PORT=$($PY -c "import socket; s=socket.socket(); s.bind(('127.0.0.1',0)); print(s.getsockname()[1]); s.close()")
 export ATTEND_TEST_BASE="http://127.0.0.1:$PORT"
 export ATTEND_BASE_URL="$ATTEND_TEST_BASE"
@@ -147,9 +149,15 @@ layer_static() {
 
 layer_unit() {
   local log="$LOGDIR/unit.log"
-  # test_teacher_friction.py 併入覆蓋率量測：events／funnel／beacon／discord 門檻的程式碼只有那支檔案測到，
-  # 沒併進來覆蓋率會假性回落，pyproject.toml 的 97% 門檻會被沒做錯事的程式碼拖垮
-  $PY -m pytest tests/test_unit.py tests/test_api.py tests/test_teacher_friction.py \
+  # test_teacher_friction.py 併入覆蓋率量測（events／funnel／beacon／discord 門檻
+  # 程式碼只有那支檔案測到，沒併進來覆蓋率會假性回落、97% 閘門會被沒做錯事的程式碼拖垮）
+  # test_log_funnel.py、test_session_report.py：兩支診斷工具（tools/）的回歸，
+  # 工具跑在子行程或只讀 app.py 原始碼，不影響 app 的覆蓋率量測
+  # test_friction.py：86 條學生端摩擦回歸，一定要跑在閘門裡；併進來一起量覆蓋率
+  # test_rehearsal_model.py 只測彩排的行為模型、test_version.py 在沒有 CHANGELOG 的工作樹會略過，兩者都不碰 app
+  # test_harness.py：測試外殼自己的回歸（conftest 在 mutmut 的連續 pytest.main 底下要還原得回來），子行程跑，不影響覆蓋率
+  $PY -m pytest tests/test_unit.py tests/test_api.py tests/test_friction.py tests/test_teacher_friction.py tests/test_log_funnel.py tests/test_session_report.py tests/test_harness.py tests/test_manage.py tests/test_fake_names.py \
+    tests/test_api_extra.py tests/test_closed_session.py tests/test_rehearsal_model.py tests/test_version.py \
     --cov=app --cov-branch --cov-report=term-missing > "$log" 2>&1
   return $?
 }
@@ -170,7 +178,8 @@ layer_state() {
 
 layer_scenario() {
   local log="$LOGDIR/scenario.log"
-  $PY tests/scenario.py > "$log" 2>&1
+  # 資料庫放 $LOGDIR 底下的唯一路徑，不落固定的 /tmp 檔名
+  ATTEND_SCEN_DB="$LOGDIR/scenario.db" $PY tests/scenario.py > "$log" 2>&1
   return $?
 }
 
@@ -198,8 +207,8 @@ layer_fuzz() {
   local rc=$?
   [ "$MODE" = "full" ] && {
     echo
-    echo "== 參考用（不計入本層失敗）：用 --checks all 對同一支 app 實測過，下列四類失敗全部源自"
-    echo "   OpenAPI schema 沒逐一宣告，不是伺服器真的處理錯，留給人工複查 =="
+    echo "== 待裁定（不計入本層失敗；2026-09-21 用 --checks all 對同一支 app 實測過，四類失敗全部源自"
+    echo "   OpenAPI schema 沒逐一宣告，不是伺服器真的處理錯，人工複查用）=="
     echo "   - positive_data_acceptance：schema 允許空字串（沒宣告 minLength），app 業務邏輯正確拒絕 → 誤判成"
     echo "     「拒絕了合法請求」"
     echo "   - content_type_conformance：HTMLResponse／CSV 路由的 schema 沒宣告對應 Content-Type（FastAPI"
@@ -243,11 +252,12 @@ layer_e2e_friction() {
   kill_stale
   rm -f "$dbfile" "$dbfile-wal" "$dbfile-shm"
   ATTEND_DB="$dbfile" $PY manage.py import-roster --code NTUB-CD --name "脈絡設計與實踐" --csv "$ROSTER" >/dev/null 2>&1
-  # 表單倒數測試要等 grant_seconds 到期；設成允許的最小值（30 秒）不用等預設的 180 秒
+  # 倒數測試要等 grant_seconds 到期；設成允許的最小值（30 秒）不用等預設的 180 秒
   ATTEND_DB="$dbfile" $PY manage.py set --code NTUB-CD --key grant_seconds --value 30 >/dev/null 2>&1
   start_server "$dbfile" 0 "$slog"
   if [ $? -ne 0 ]; then { echo "伺服器啟動失敗"; cat "$slog"; } >> "$log"; stop_server; return 1; fi
-  $PY tests/e2e_friction_playwright.py >> "$log" 2>&1
+  # 測試直接讀寫的資料庫路徑跟伺服器用的是同一個 $dbfile（$LOGDIR 底下，每層各自一個）
+  ATTEND_E2E_DB="$dbfile" $PY tests/e2e_friction_playwright.py >> "$log" 2>&1
   local rc=$?
   stop_server
   return $rc
@@ -259,11 +269,13 @@ layer_e2e_teacher() {
   kill_stale
   rm -f "$dbfile" "$dbfile-wal" "$dbfile-shm"
   ATTEND_DB="$dbfile" $PY manage.py import-roster --code NTUB-CD --name "脈絡設計與實踐" --csv "$ROSTER" >/dev/null 2>&1
-  # 投影頁卡格測試要等 remain+interval 秒才會蓋遮罩；設成允許的最小值（5 秒）不用等預設的 10 秒
+  # 卡格測試要等 remain+interval 秒才會蓋遮罩；設成允許的最小值（5 秒）不用等預設的 10 秒
   ATTEND_DB="$dbfile" $PY manage.py set --code NTUB-CD --key qr_interval --value 5 >/dev/null 2>&1
+  # staleAt 算「換碼時間點＋grace」，測試自己在需要時透過設定頁 API 動態調整 qr_grace，
+  # 這裡不用另外設定預設值
   start_server "$dbfile" 0 "$slog"
   if [ $? -ne 0 ]; then { echo "伺服器啟動失敗"; cat "$slog"; } >> "$log"; stop_server; return 1; fi
-  $PY tests/e2e_teacher_friction_playwright.py >> "$log" 2>&1
+  ATTEND_E2E_DB="$dbfile" $PY tests/e2e_teacher_friction_playwright.py >> "$log" 2>&1
   local rc=$?
   stop_server
   return $rc
@@ -312,13 +324,20 @@ layer_rehearsal() {
   fi
   # rehearsal.py 自己挑空埠、自己建暫存庫、自己啟 uvicorn（見它的 start_server()），
   # 不吃這支閘門的 ATTEND_TEST_BASE／PORT，這裡不用也不該幫它另外起一個伺服器。
-  $PY tests/rehearsal.py --profile field --students 30 --weeks 2 > "$log" 2>&1
-  return $?
+  # 跑兩組種子，任一組沒過這一層就失敗；兩組的總表都留在 log 裡
+  local rc=0 seed
+  : > "$log"
+  for seed in 1 2; do
+    echo "== 彩排：種子 $seed ==" >> "$log"
+    $PY tests/rehearsal.py --profile field --students 30 --weeks 2 --seed "$seed" >> "$log" 2>&1 || rc=1
+  done
+  return $rc
 }
 
 layer_flaky() {
   local log="$LOGDIR/flaky.log"
-  $PY -m pytest tests/test_api.py --count=5 -x > "$log" 2>&1
+  # 偶發 ERROR 都出在 test_teacher_friction.py（Discord 背景執行緒），一起重跑
+  $PY -m pytest tests/test_api.py tests/test_teacher_friction.py --count=5 -x > "$log" 2>&1
   return $?
 }
 

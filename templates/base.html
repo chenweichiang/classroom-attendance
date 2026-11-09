@@ -6,18 +6,63 @@
 <title>{% block title %}課堂點名{% endblock %}</title>
 <script>
 (function(){
-  {# 前端錯誤回報：sendBeacon 送不出去就放棄，回報本身不得再拋錯或擋住頁面。 #}
+  // 前端錯誤回報，用 sendBeacon 打不到就默默放棄；不得因為回報本身再拋錯或擋住頁面。
+  // ①場次號網址抓不到時（/c 進表單）改用 window.ATTEND_SID；②neterr／whoami_fail 是「網路本來就壞」時才發生的，
+  // 當場送一定也送不出去——先放進佇列，等網路回來（online）、頁面重新顯示（pageshow）、
+  // 或學生頁任何一次 fetch 拿到回應之後再補送，訊息尾巴註明晚了幾秒；佇列最多 20 筆，滿了丟最舊的。
+  // ①msg 以「http 」開頭＝伺服器有回應、網路是通的（例如 502 的 HTML），當場送，送不出去才進佇列；
+  // ②佇列改放 localStorage（sessionStorage 是每個分頁一份，學生關掉分頁或換分頁重掃就送不到）；
+  // ③補送一次最多 5 筆（伺服器每裝置每分鐘只收 6 筆，一次倒出整個佇列會被丟掉），剩下的 61 秒後再送。
+  var QK='attendBeaconQ',QMAX=20,FLUSH_MAX=5,flushTimer=null;
+  function sidNow(){
+    var m=location.pathname.match(/\/(?:t\/session|t\/projector|s)\/(\d+)/);
+    if(m)return m[1];
+    return window.ATTEND_SID?String(window.ATTEND_SID):'';
+  }
+  function qRead(){try{var a=JSON.parse(localStorage.getItem(QK)||'[]');return Array.isArray(a)?a:[]}catch(e){return []}}
+  function qWrite(a){try{localStorage.setItem(QK,JSON.stringify(a))}catch(e){/* 存不了就當沒有佇列 */}}
+  function send(kind,msg,sid){
+    var fd=new FormData();
+    fd.append('kind',kind);
+    fd.append('msg',String(msg||'').slice(0,200));
+    if(sid)fd.append('sid',sid);
+    return navigator.sendBeacon('/api/beacon',fd);
+  }
   function report(kind,msg){
     try{
       if(!navigator.sendBeacon)return;
-      var fd=new FormData();
-      fd.append('kind',kind);
-      fd.append('msg',String(msg||'').slice(0,200));
-      var m=location.pathname.match(/\/(?:t\/session|t\/projector|s)\/(\d+)/);
-      if(m)fd.append('sid',m[1]);
-      navigator.sendBeacon('/api/beacon',fd);
+      var sid=sidNow();
+      if(kind==='neterr'||kind==='whoami_fail'){
+        if(String(msg||'').indexOf('http ')===0){var sentNow=false;try{sentNow=send(kind,msg,sid)}catch(e){sentNow=false}if(sentNow)return}
+        var q=qRead();
+        q.push({kind:kind,msg:String(msg||'').slice(0,150),sid:sid,t:Date.now()});
+        while(q.length>QMAX)q.shift();
+        qWrite(q);
+        return;
+      }
+      send(kind,msg,sid);
     }catch(e){/* 回報失敗不能再噴錯 */}
   }
+  function flush(){
+    try{
+      if(!navigator.sendBeacon)return;
+      var q=qRead();
+      if(!q.length)return;
+      var keep=[],sent=0;
+      q.forEach(function(it){
+        if(sent>=FLUSH_MAX){keep.push(it);return}
+        var ok=false;
+        try{ok=send(it.kind,(it.msg||'')+' (+'+Math.round((Date.now()-it.t)/1000)+'s)',it.sid)}catch(e){ok=false}
+        if(ok)sent++;else keep.push(it);
+      });
+      qWrite(keep);
+      if(keep.length&&!flushTimer){flushTimer=setTimeout(function(){flushTimer=null;flush()},61000)}
+    }catch(e){/* 補送失敗下次再試 */}
+  }
+  window.attendReport=report;  // L7：student.html 在送出失敗、whoami 失敗時用它回報
+  window.attendFlush=flush;
+  window.addEventListener('online',flush);
+  window.addEventListener('pageshow',flush);
   window.addEventListener('error',function(e){report('jserror',(e&&e.message)||'error')});
   window.addEventListener('unhandledrejection',function(e){report('jserror',(e&&e.reason&&e.reason.message)||String((e&&e.reason)||'rejection'))});
 })();
@@ -78,6 +123,7 @@ th{font:12px/1.4 var(--mono);color:var(--muted);letter-spacing:.06em;text-align:
 td{padding:8px;border-bottom:1px solid var(--rule);vertical-align:top}
 tr:last-child td{border-bottom:0}
 .mono{font-family:var(--mono);font-size:.92em;letter-spacing:.02em}
+input.mono{font-size:16px}
 .tablewrap{overflow-x:auto}
 /* 狀態記號 */
 .tag{display:inline-block;font:12px/1 var(--mono);letter-spacing:.06em;padding:4px 7px;border:1px solid var(--ink);margin:1px 3px 1px 0;white-space:nowrap}

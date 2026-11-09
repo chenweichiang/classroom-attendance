@@ -12,18 +12,30 @@ tr.st-none td{color:var(--muted)}
 select.mini{width:auto;padding:8px 0;min-height:44px;font-size:.9rem;border-bottom-width:1px}
 .filter{display:flex;gap:10px;flex-wrap:wrap;align-items:flex-end;margin-bottom:6px}
 .filter input,.filter select{width:auto;min-width:160px;padding:6px 4px;font-size:.92rem}
-@media (max-width:600px){td.hide-sm,th.hide-sm{display:none}td,th{padding:6px 4px}}
+@media (max-width:600px){td.hide-sm,th.hide-sm{display:none}td,th{padding:6px 4px}
+/* 窄螢幕名單每列折成兩三行（學號、姓名、狀態一行；時間、標記、改狀態各佔一行），資訊一項不少，也不用左右捲 */
+#rowsTable,#rows{display:block}#rowsTable thead{display:none}
+#rows tr{display:grid;grid-template-columns:auto 1fr auto;gap:0 8px;align-items:center;border-bottom:1px solid var(--rule);padding:6px 0}
+#rows td{border:0;padding:2px 4px;min-width:0}
+#rows td:nth-child(n+4){grid-column:1/-1}
+#rows td.hide-sm{display:block}#rows td.hide-sm:empty{display:none}
+#rows .tag{white-space:normal}#rows td{overflow-wrap:anywhere}
+#stuck .tag,#picks .tag{white-space:normal;overflow-wrap:anywhere}
+#rows select.mini{max-width:100%}}
 </style>{% endblock %}
 {% block body %}
 <div class="mast"><span class="k"><a href="/t" style="text-decoration:none"><b>課堂點名</b></a> · {{ c.name }}</span><nav><a href="/t/projector/{{ s.id }}" target="_blank">開投影頁</a><a href="/t/course/{{ c.id }}/students">名冊</a><a href="/t">主頁</a></nav></div>
 
-<div class="status"><span class="ph" id="phase"></span><span class="tag flag" id="kindTag" style="display:none">綁定場次</span><span class="tag flag" id="voidedTag" style="display:none">已作廢</span><span class="k" id="timer"></span></div>
+<div class="status"><span class="ph" id="phase"></span><span class="tag flag" id="kindTag" style="display:none">綁定場次</span><span class="tag flag" id="voidedTag" style="display:none">已作廢</span><span class="k" id="timer"></span><span class="k" id="extendHint" style="display:none;color:var(--red)">　還有人在填就按延長</span></div>
 <div class="counts" id="counts" aria-live="polite"></div>
 <div class="row">
 <button type="button" onclick="spot()" id="spotBtn">抽點 {{ st.spot_n }} 人</button>
 <button type="button" class="ghost" onclick="extend()" id="extendBtn">延長 2 分鐘</button>
 <button type="button" class="danger" onclick="closeSession()" id="closeBtn">結束點名</button>
+<button type="button" class="ghost" id="reopenBtn" onclick="reopenSession()" style="display:none">取消結束</button>
 <button type="button" class="ghost mini" onclick="delSession()" title="誤開或測試用，整筆刪除，報表不計">刪除此次</button>
+<button type="button" class="ghost mini" id="holdBtn" onclick="toggleHold()" style="display:none"></button>
+<span class="muted sm" id="holdHint" style="display:none">暫緩中：結束時不會自動發，補完名單再按「發到 Discord」</span>
 </div>
 <div class="row" style="margin-top:10px">
 <button type="button" class="ghost mini" id="bindBtn" onclick="toggleBind()"></button>
@@ -36,58 +48,114 @@ select.mini{width:auto;padding:8px 0;min-height:44px;font-size:.9rem;border-bott
 <select class="mini" id="bulkTo" aria-label="整批更正目標狀態"><option value="present">出席</option><option value="late">遲到</option><option value="excused">請假</option></select>
 <button type="button" class="ghost mini" onclick="bulkStatus()">整批更正</button>
 </div>
-<p class="err" id="heldMsg" role="status" style="display:none">這次出席不到一半，缺席名單沒有自動發到 Discord。先確認名單不是系統問題造成的，再按「發到 Discord」。</p>
-<p class="k" style="margin:10px 0 0">教室 IP <span id="tip" class="mono">（開投影頁後記錄）</span>　<button type="button" class="ghost mini" onclick="resetIp()" title="用現在這台裝置的網路出口當教室 IP（投影筆電按才對，手機 4G 別按）">以這台為教室 IP</button></p>
-<p class="muted sm" id="ipMutedHint" style="display:none;margin:4px 0 0">這場多數人不是走教室網路，「IP 與教室不同」沒有參考性，先不顯示。</p>
+<p class="err" id="lowMsg" role="status" style="display:none">這次出席不到一半，多半是整場出了問題（例如投影幕沒出現 QR、網路不通）。名單不對的話，可以用下面的「整批更正」或「本場作廢」；名單正確就不用理這行。</p>
+<p class="err" id="heldMsg" role="status" style="display:none">這一場結束時出席不到一半，所以沒有自動發 Discord。名單確認沒問題再按「發到 Discord」。</p>
+<p class="err" id="discordFailedMsg" role="status" style="display:none">自動發到 Discord 沒有成功（可能是機器人權限或頻道設定有問題）。請按「發到 Discord」重發；還是失敗就把錯誤訊息記下來。</p>
+<p class="err" id="discordStaleMsg" role="status" style="display:none"></p>
+<p class="sm" id="projMsg" style="display:none"></p>
+<p class="k" style="margin:10px 0 0">教室 IP <span id="tip" class="mono">（還沒收到投影頁回報）</span>　<button type="button" class="ghost mini" onclick="resetIp()" title="用現在這台裝置的網路出口當教室 IP（投影筆電按才對，手機 4G 別按）">以這台為教室 IP</button> <span class="muted sm">記錄用，不影響簽到與名單</span></p>
 <div class="row funnel" id="funnel" style="margin-top:8px"></div>
 <div id="stuck" style="display:none"></div>
+<div id="stuckdone" class="sm" aria-live="polite"></div>
 <p class="muted sm" style="margin:6px 0 0" id="phaseHint"></p>
 
 <div id="spot" style="display:none"><h2>抽點<small>叫學號與姓名，看人，按在或不在</small></h2>
+<p class="muted sm" id="spotClosedHint" style="display:none">點名已結束，要改請在名單上改狀態</p>
 <div id="picks" aria-live="polite"></div></div>
+
+<div id="manualSection">
+<h2>手動簽到<small>沒手機、忘 PIN、被鎖的人走這裡；輸完整學號、後 3 碼以上，或姓名片段，符合的人才會有出席／遲到鈕。忘了 PIN 的人記完之後，到名冊頁按「重設」，下次才不會又卡</small></h2>
+<div class="row"><input id="mid" placeholder="學號、學號後 3 碼、或姓名" class="mono" autocomplete="off" style="width:auto;min-width:220px"></div>
+<div id="mdone" class="sm" aria-live="polite" style="min-height:0"></div>
+<div id="mfails" aria-live="polite"></div>
+<div id="mcands" aria-live="polite"></div>
+</div>
 
 <h2>名單<small>每三秒更新<span id="pause" style="display:none;color:var(--red)">　操作中，暫停更新</span><span id="net" style="display:none;color:var(--red)">　連線不穩，重試中</span></small></h2>
 <div class="filter">
 <select id="filter" onchange="render()"><option value="">全部</option><option value="pending">待確認</option><option value="none">未簽到</option><option value="flag">有標記</option></select>
 <input id="q" placeholder="搜學號或姓名" oninput="render()">
 </div>
-<div class="tablewrap"><table><thead><tr><caption class="k" style="text-align:left;caption-side:top;padding:0 0 4px">名單，每列右邊的下拉可改狀態</caption><th>學號</th><th>姓名</th><th>狀態</th><th class="hide-sm">時間</th><th>標記</th><th>改</th></tr></thead><tbody id="rows"></tbody></table></div>
-
-<div id="manualSection">
-<h2>手動簽到<small>沒手機、忘 PIN、被鎖的人走這裡；輸完整學號、後 3 碼以上，或姓名片段，符合的人才會有出席／遲到鈕</small></h2>
-<div class="row"><input id="mid" placeholder="學號、學號後 3 碼、或姓名" class="mono" autocomplete="off" style="width:auto;min-width:220px"></div>
-<div id="mcands" aria-live="polite"></div>
-</div>
+<div class="tablewrap"><table id="rowsTable"><caption class="k" style="text-align:left;caption-side:top;padding:0 0 4px">名單，每列右邊的下拉可改狀態</caption><thead><tr><th>學號</th><th>姓名</th><th>狀態</th><th class="hide-sm">時間</th><th>標記</th><th>改</th></tr></thead><tbody id="rows"></tbody></table></div>
 
 <script>
 const sid={{ s.id }}, SL={{ STATUS_LABEL|tojson }}, FL={{ FLAG_LABEL|tojson }}, RL={{ REJECT_REASON_LABEL|tojson }};
 let state={rows:[],spots:[],funnel:null,stuck:[]};
+let picksLast='', mcandsLast='', rowsLast='';  // 上一次寫進 #picks／#mcands 的 HTML，沒變就不重寫
+// 投影頁連不上時，紅字後面接的補登說明——遲到上限之前用手動簽到補、幾乎沒人簽到就別按結束
+const MANUAL_CHECKIN_HINT='改用紙本或口頭點名時：已經有一半以上的人簽到，要在遲到上限之前用「手動簽到」把紙本上的人補進去再按結束；幾乎沒人簽到就不要按結束，課後再用「整批更正」。';
 function maskOn(){try{return localStorage.getItem('attend_mask_names')==='1'}catch(e){return false}}
 function setMaskOn(v){try{localStorage.setItem('attend_mask_names',v?'1':'0')}catch(e){/* 儲存失敗就當沒開，不擋操作 */}}
 function maskName(n){n=String(n??'');return n?n[0]+'○○':n}
 function dispName(n){return maskOn()?maskName(n):n}
 function toggleMask(){setMaskOn(!maskOn());render()}
-async function post(url,data){const fd=new FormData();for(const k in data)fd.append(k,data[k]);let r;try{r=await fetch(url,{method:'POST',body:fd,signal:AbortSignal.timeout(10000)})}catch(e){alert('送不出去（網路問題），再按一次');return{ok:false}}if(r.status===401){location.href='/t/login?next='+location.pathname;return{ok:false}}const j=await r.json().catch(()=>({ok:false,error:'伺服器忙線（HTTP '+r.status+'），再按一次'}));if(!j.ok&&j.error)alert(j.error);return j}
+// AbortSignal.timeout 沒有退路，舊瀏覽器（其實老師端一般是新版 Chrome，但這裡跟 projector.html
+// 用同一套寫法，別讓這支網頁在極端情況下整支請求發不出去）；沒有就退回 AbortController。
+function timeoutSignal(ms){
+  if(typeof AbortSignal!=='undefined'&&typeof AbortSignal.timeout==='function')return AbortSignal.timeout(ms);
+  const ctrl=new AbortController();setTimeout(()=>ctrl.abort(),ms);return ctrl.signal;
+}
+async function post(url,data,opts){
+  opts=opts||{};
+  const fd=new FormData();for(const k in data)fd.append(k,data[k]);
+  let r;
+  try{
+    r=await fetch(url,{method:'POST',body:fd,signal:timeoutSignal(opts.timeoutMs||10000)});
+  }catch(e){
+    // 延長、抽點按兩次就會生效兩次，「送不出去，再按一次」在請求其實已經送到、只是回應遺失時
+    // 照做會延長兩倍、抽兩批。改成中性訊息，並重新讀取目前狀態，讓老師自己看畫面決定要不要再按。
+    if(!opts.quiet){
+      alert('不確定有沒有送到。已重新讀取目前狀態，請先看畫面再決定要不要再按。');
+      await load(true);
+    }
+    return{ok:false,networkError:true};
+  }
+  if(r.status===401){location.href='/t/login?next='+location.pathname;return{ok:false}}
+  const j=await r.json().catch(()=>({ok:false,error:'伺服器忙線（HTTP '+r.status+'），再按一次'}));
+  if(!j.ok&&j.error&&!opts.quiet)alert(j.error);
+  return j;
+}
 async function guard(btn,fn){if(btn.disabled)return;btn.disabled=true;try{await fn()}finally{if(state.phase!=='closed'||btn.id==='notifyBtn')btn.disabled=false}}
 function esc(x){return String(x??'').replace(/[&<>"']/g,ch=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[ch]))}
 let lastKey=0;document.addEventListener('input',e=>{if(e.target.id==='q'||e.target.id==='mid')lastKey=Date.now()});
-function busy(){const ae=document.activeElement;if(!ae)return false;if(ae.closest('#rows'))return true;return (ae.id==='q'||ae.id==='mid')&&Date.now()-lastKey<5000}
+// 名單下拉開了再按 Esc，焦點留在 #rows 裡不會消失，舊版「焦點在 #rows 就永遠算忙碌」會讓輪詢
+// 無限期暫停。改成只認「最後一次在 #rows 裡的操作」，超過 10 秒沒有新操作就不再算忙碌，照常重繪
+// （重繪會把 select 換掉，這是預期，不為了保住焦點另寫複雜邏輯）。
+let lastRowsAction=0;
+['pointerdown','keydown','change','input'].forEach(evt=>document.getElementById('rows').addEventListener(evt,()=>{lastRowsAction=Date.now()}));
+function busy(){const ae=document.activeElement;if(!ae)return false;if(ae.closest('#rows'))return Date.now()-lastRowsAction<10000;return (ae.id==='q'||ae.id==='mid')&&Date.now()-lastKey<5000}
 let inflight=false;
-async function load(force){const pause=document.getElementById('pause');if(!force&&busy()){if(pause)pause.style.display='';return} if(pause)pause.style.display='none';if(inflight&&!force)return;inflight=true;try{ // 老師正在操作名單或打字時，輪詢不重繪
-  let r;try{r=await fetch('/api/t/session/'+sid+'/state',{cache:'no-store',signal:AbortSignal.timeout(8000)})}catch(e){document.getElementById('net').style.display='';return}
-  document.getElementById('net').style.display='none';if(r.status===401){location.href='/t/login?next='+location.pathname;return}if(r.status===404){alert('這次點名已被刪除');location.href='/t';return}state=await r.json();render()}finally{inflight=false}}
+// 每次送出前取一個遞增序號；回應回來時如果已經有更新的一輪（不管是不是 force）搶先送出，
+// 這個回應（不論成功、404/401、網路失敗）就整個丟棄，畫面不套用——否則會出現「回應晚到、把
+// 延長／結束之後的新狀態蓋回舊值」這種倒退。
+let loadSeq=0;
+async function load(force){const pause=document.getElementById('pause');if(!force&&busy()){if(pause)pause.style.display='';return} if(pause)pause.style.display='none';if(inflight&&!force)return;inflight=true;const mySeq=++loadSeq;try{ // 老師正在操作名單或打字時，輪詢不重繪
+  // 這裡兩個 catch 都要在顯示 #net 之後補呼叫一次 render()——否則要等下一次輪詢成功
+  // 才會重繪，#projMsg 的「點名頁本身連不上伺服器」要在失敗當下就換上，不能等恢復後才補講。
+  let r;try{r=await fetch('/api/t/session/'+sid+'/state',{cache:'no-store',signal:timeoutSignal(8000)})}catch(e){if(mySeq<loadSeq)return;document.getElementById('net').style.display='';render();return}
+  if(mySeq<loadSeq)return;  // 這輪已經過期，401/404/JSON 都不處理
+  if(r.status===401){location.href='/t/login?next='+location.pathname;return}if(r.status===404){alert('這次點名已被刪除');location.href='/t';return}
+  // r.json() 也包進 try，解析失敗（截斷、伺服器忙線吐一半）跟網路失敗一樣計入失敗、顯示 #net；
+  // 成功解析後才藏起 #net，不要在拿到 response 就先藏（那時還不知道 body 解不解得開）
+  let j;try{j=await r.json()}catch(e){if(mySeq<loadSeq)return;document.getElementById('net').style.display='';render();return}
+  if(mySeq<loadSeq)return;  // json 解析期間又被更新的一輪超車，一樣丟棄
+  document.getElementById('net').style.display='none';state=j;render()}finally{inflight=false}}
 function fmtMin(x){return Math.max(0,Math.ceil(x/60))}
+// 出席窗／遲到窗剩不到一分鐘時改顯示秒數（老師這時候在意的是「還有幾秒」，不是「還有 1 分」）。
+function fmtRemain(x){x=Math.max(0,x);return x<60?(Math.ceil(x)+' 秒'):(Math.ceil(x/60)+' 分')}
 function render(){
   const c=state.counts||{};
-  {# 綁定場次不計出缺勤，counts 列只呈現「已綁定 N 人」，不列出席、遲到等狀態統計 #}
+  // 綁定場次不計出缺勤，counts 列只呈現「已綁定 N 人」，不show 出席/遲到等狀態統計
   document.getElementById('counts').innerHTML=state.kind==='bind'
     ?`<span class="tag s-present">已綁定 ${state.bound_n||0} 人</span>`
     :['present','late','pending','absent','excused'].map(k=>`<span class="tag s-${k}">${SL[k]} ${c[k]||0}</span>`).join('')+`<span class="tag s-absent">未簽到 ${c.none||0}</span>`;
   const ph=state.phase;
   document.getElementById('phase').textContent=ph==='open'?'簽到中':ph==='late'?'遲到區':'已結束';
-  document.getElementById('timer').textContent=ph==='open'?('出席窗剩 '+fmtMin(state.open_until-state.now)+' 分'):ph==='late'?('遲到窗剩 '+fmtMin(state.late_until-state.now)+' 分'):'';
-  document.getElementById('tip').textContent=state.teacher_ip||'（開投影頁後記錄）';
-  document.getElementById('ipMutedHint').style.display=state.ip_check_muted?'':'none';
+  document.getElementById('timer').textContent=ph==='open'?('出席窗剩 '+fmtRemain(state.open_until-state.now)):ph==='late'?('遲到窗剩 '+fmtRemain(state.late_until-state.now)):'';
+  // 綁定場次快結束時（剩不到 60 秒），提醒老師還有人在填就按延長——綁定場次沒有遲到區，
+  // 過了 open_until（＝late_until）就整個結束，跟一般場次「還有遲到窗」的情況不同。
+  document.getElementById('extendHint').style.display=(ph!=='closed'&&(state.kind==='bind'?(state.open_until-state.now)<60:(state.late_until-state.now)<60))?'':'none';
+  document.getElementById('tip').textContent=state.teacher_ip||'（還沒收到投影頁回報）';
   document.getElementById('closeBtn').disabled=(ph==='closed');document.getElementById('spotBtn').disabled=(ph==='closed');document.getElementById('extendBtn').disabled=(ph==='closed');
   document.getElementById('extendBtn').textContent=ph==='late'?'延長遲到窗 2 分鐘':'延長出席窗 2 分鐘';
   document.getElementById('phaseHint').textContent=ph==='open'?'出席窗內按延長：出席窗與遲到窗一起往後推。抽點與待確認裁定要在按「結束點名」之前做完。':ph==='late'?'已進遲到區：延長只延遲到窗，現在簽的人都是遲到，出席窗不會回來。抽點與待確認裁定要在結束前做完。':'已結束：狀態仍可用下拉修改；抽點與延長已停用。';
@@ -95,13 +163,61 @@ function render(){
   if(state.bind_forced){bb.textContent='首次綁定：本場一律開放';bb.disabled=true;bb.style.color='';}
   else{bb.disabled=false;bb.textContent=state.allow_bind?'首次綁定：開放中（按一下關閉）':'首次綁定：已關閉（按一下開放）';bb.style.color=state.allow_bind?'':'var(--red)';}
   const mb=document.getElementById('maskBtn'); mb.textContent=maskOn()?'遮姓名：開啟中（按一下關閉）':'遮姓名：已關閉（按一下開啟）'; mb.style.color=maskOn()?'var(--red)':'';
-  {# 綁定場次與已作廢場次不計出缺勤，沒有名單可發，隱藏「發到 Discord」與暫緩提示 #}
+  // 綁定場次與已作廢場次不計出缺勤，沒有名單可發，隱藏「發到 Discord」與暫緩提示
   const notifyOk=state.kind==='normal'&&!state.voided;
   document.getElementById('notifyBtn').style.display=(state.discord&&ph==='closed'&&notifyOk)?'':'none';
   document.getElementById('heldMsg').style.display=(state.discord_held&&ph==='closed'&&notifyOk)?'':'none';
+  // 暫緩有兩種原因，#heldMsg 換句話講對——手動暫緩跟出席率低不是同一件事
+  document.getElementById('heldMsg').textContent=state.discord_held_manual
+    ?'這一場按了「先不要自動發」，結束時沒有自動發 Discord。名單補好再按「發到 Discord」。'
+    :'這一場結束時出席不到一半，所以沒有自動發 Discord。名單確認沒問題再按「發到 Discord」。';
+  // 進行中（open/late）就能按的暫緩開關，結束後隱藏（那時只剩「發到 Discord」有意義）
+  const holdOk=notifyOk&&(ph==='open'||ph==='late');
+  const hb=document.getElementById('holdBtn');
+  hb.style.display=(state.discord&&holdOk)?'':'none';
+  hb.textContent=state.discord_held_manual?'取消暫緩（結束時照常發 Discord）':'這場先不要自動發 Discord';
+  document.getElementById('holdHint').style.display=(state.discord&&holdOk&&state.discord_held_manual)?'':'none';
+  // 背景發送失敗（token 失效／bot 被移除／頻道錯）留下線索，結束後顯示紅字提醒重發
+  if(state.discord_fail_text)document.getElementById('discordFailedMsg').textContent=state.discord_fail_text;  // 照失敗原因換字
+  document.getElementById('discordFailedMsg').style.display=(state.discord_failed&&ph==='closed'&&notifyOk)?'':'none';
+  // 名單發出去之後又改了狀態，Discord 上的還是舊名單；提醒老師按「發到 Discord」更新（舊訊息撤不回）
+  const dsEl=document.getElementById('discordStaleMsg');
+  dsEl.style.display=(state.discord_stale>0&&ph==='closed'&&notifyOk)?'':'none';
+  dsEl.textContent='名單發出後又改了 '+state.discord_stale+' 筆，Discord 上的還是舊名單；要更新請按「發到 Discord」（舊訊息撤不回）。';
+  // 誤按結束的救法，結束後 10 分鐘內顯示（剩餘秒數由伺服器算）
+  const rb=document.getElementById('reopenBtn');
+  rb.style.display=(state.reopen_left>0)?'':'none';
+  rb.textContent='取消結束（'+Math.ceil(state.reopen_left/60)+' 分鐘內可按）';
+  // 出席不到一半的提示與 Discord 脫鉤——手動結束與自動結案一視同仁，不看 note
+  document.getElementById('lowMsg').style.display=state.low_rate?'':'none';
+  // 老師頁看得到投影頁有沒有在取碼，只在場次進行中（open/late）顯示；
+  // 點名頁自己的輪詢正在失敗（#net 顯示中）時，投影頁狀態暫時不明，優先顯示這個，不猜投影頁的事。
+  const pm=document.getElementById('projMsg');
+  const netEl=document.getElementById('net');
+  const netDown=!!(netEl&&getComputedStyle(netEl).display!=='none');
+  if(ph==='open'||ph==='late'){
+    pm.style.display='';
+    if(netDown){
+      pm.className='sm muted'; pm.textContent='點名頁本身連不上伺服器，投影頁狀態暫時不明';
+    }else if(state.projector_age===null||state.projector_age===undefined){
+      if((state.opened_age||0)<60){
+        pm.className='sm muted'; pm.textContent='還沒收到投影頁的消息（剛開始點名，等投影頁出現 QR）';
+      }else{
+        pm.className='sm err';
+        pm.textContent='開始點名一分鐘了，投影頁還沒連上伺服器。如果投影幕上沒有 QR，多半是網路問題。　'+MANUAL_CHECKIN_HINT;
+      }
+    }else if(state.projector_age>15){
+      pm.className='sm err';
+      pm.textContent='投影頁已經 '+state.projector_age+' 秒沒有收到新的 QR。　'+MANUAL_CHECKIN_HINT;
+    }else{
+      pm.className='sm muted'; pm.textContent='投影頁連線正常';
+    }
+  }else{
+    pm.style.display='none';
+  }
   document.getElementById('kindTag').style.display=state.kind==='bind'?'':'none';
   document.getElementById('voidedTag').style.display=state.voided?'':'none';
-  document.getElementById('spotBtn').style.display='';  {# 綁定場次也開放抽點 #}
+  document.getElementById('spotBtn').style.display='';  // 綁定場次也開放抽點
   const vb=document.getElementById('voidBtn');
   if(ph==='closed'){vb.style.display='';vb.textContent=state.voided?'已作廢（按一下取消作廢）':'本場作廢（不計出缺勤，紀錄保留）';vb.style.color=state.voided?'var(--red)':'';}
   else{vb.style.display='none'}
@@ -111,47 +227,144 @@ function render(){
   const f=document.getElementById('filter').value, q=document.getElementById('q').value.trim();
   const rows=state.rows.filter(r=>{
     if(f==='pending'&&r.status!=='pending')return false;
-    if(f==='none'&&r.status)return false;
-    if(f==='flag'&&!r.flags.length)return false;
+    if(f==='none'&&(r.status||r.na))return false;
+    if(f==='flag'&&!(r.flags.filter(x=>x!=='late_bind'&&x!=='was_late'&&x!=='ip_differs').length||r.locked||r.tried))return false;
     if(q&&!(r.student_id.includes(q.toUpperCase())||r.name.includes(q)))return false;
     return true});
-  document.getElementById('rows').innerHTML=rows.map(r=>`<tr class="st-${r.status||'none'}">
+  const rowsHtml=rows.map(r=>`<tr class="st-${r.status||'none'}">
    <td class="mono">${esc(r.student_id)}</td><td style="white-space:nowrap">${esc(dispName(r.name))}${r.bound?'':' <span class="k">未綁</span>'}</td>
-   <td>${r.status?`<span class="tag s-${r.status}">${SL[r.status]}</span>`:'—'}${r.locked?' <span class="tag flag">PIN 鎖定</span>':''}</td>
+   <td>${r.status?`<span class="tag s-${r.status}">${SL[r.status]}</span>`:(r.na?'<span class="k">開場後加選</span>':'—')}${r.locked?' <span class="tag flag">PIN 鎖定</span>':''}</td>
    <td class="hide-sm mono">${r.ts||''}</td>
-   <td>${r.flags.filter(x=>x!=='late_bind'&&x!=='was_late').map(x=>`<span class="tag flag">${esc(FL[x]||x)}</span>`).join('')}${r.ip&&state.teacher_ip&&r.ip!==state.teacher_ip?`<span class="k"> ${esc(r.ip)}</span>`:''}</td>
-   <td>${state.kind==='bind'?'<span class="k">綁定場次不計出缺勤，要補登請另開一般點名</span>':`<select class="mini" aria-label="改 ${esc(r.name)} 的狀態" onchange="setStatus(${r.pk},this.value)"><option value="">改成</option>${['present','late','absent','excused'].filter(k=>k!==r.status).map(k=>`<option value="${k}">${SL[k]}</option>`).join('')}</select>`}</td></tr>`).join('');
+   <td>${r.tried?`<span class="tag flag">掃碼被擋：${esc(RL[r.tried]||(r.tried==='error'?'伺服器出錯':r.tried))}</span>`:''}${r.status==='pending'&&r.flags.includes('was_late')?'<span class="tag flag">遲到區簽到</span>':''}${r.flags.filter(x=>x!=='late_bind'&&x!=='was_late'&&x!=='ip_differs').map(x=>`<span class="tag flag">${esc(FL[x]||x)}</span>`).join('')}</td>
+   <td>${state.kind==='bind'?'<span class="k">綁定場次不計出缺勤，要補登請另開一般點名</span>':`<select class="mini" aria-label="改 ${esc(r.name)} 的狀態" onchange="onStatusSelect(${r.pk},this.value,${r.status==='pending'&&r.flags.includes('was_late')?'true':'false'})"><option value="">改成</option>${['present','late','absent','excused'].filter(k=>k!==r.status).map(k=>`<option value="${k}">${SL[k]}</option>`).join('')}</select>`}</td></tr>`).join('');
+  // 老師頁名單輪詢：HTML 沒變就不寫，免得每 3 秒重寫吃掉正要點的下拉選單
+  if(rowsHtml!==rowsLast){rowsLast=rowsHtml;document.getElementById('rows').innerHTML=rowsHtml}
   document.getElementById('manualSection').style.display=state.kind==='bind'?'none':'';
+  // 新名單套用後，失敗清單裡「該學生現在的狀態已經等於當時想改成的狀態」那筆算過時
+  // 了（多半是重新整理／輪詢時剛好追上，或伺服器其實收到了只是回應本身失敗）——清掉，不用老師
+  // 再手動處理一次已經生效的東西。
+  {let mfChanged=false;
+   for(const pk of Object.keys(mFails)){
+     const rr=state.rows.find(x=>String(x.pk)===String(pk));
+     if(rr&&mFails[pk].status&&rr.status===mFails[pk].status){delete mFails[pk];mfChanged=true}
+   }
+   if(mfChanged)renderMFails();}
   if(state.spots.length){document.getElementById('spot').style.display='';
-    document.getElementById('picks').innerHTML=state.spots.map(p=>`<div class="pick"><span class="sid">${esc(p.student_id)}</span><span class="nm">${esc(p.name)}</span>
-     ${p.result?`<span class="tag ${p.result==='ok'?'s-present':'s-pending'}">${p.result==='ok'?'在':'不在'}</span>${p.result==='absent'&&state.kind==='bind'?'<span class="tag flag">不在場：已撤回這個學號的綁定，本場不能再綁；人其實在場的話，下次上課再綁</span>':''}`:`<span class="row"><button type="button" onclick="spotResult(${p.id},1)">在</button><button type="button" class="danger" onclick="spotResult(${p.id},0)">不在</button></span>`}</div>`).join('')}
+    document.getElementById('spotClosedHint').style.display=(ph==='closed')?'':'none';
+    // 輪詢每三秒重繪一次，按住「不在」的指頭中途 DOM 被換掉，放開時 click 就沒了；HTML 沒變就不寫
+    const picksHtml=state.spots.map(p=>`<div class="pick"><span class="sid">${esc(p.student_id)}</span><span class="nm">${esc(p.name)}</span>
+     ${p.result?`<span class="tag ${p.result==='ok'?'s-present':'s-pending'}">${p.result==='ok'?'在':'不在'}</span>${p.result==='absent'&&state.kind==='bind'?'<span class="tag flag">不在場：已撤回這個學號的綁定，今天不能再綁；人其實在場的話，下次上課再綁（首次綁定要開著）</span>':''}`:`<span class="row"><button type="button" ${ph==='closed'?'disabled':''} onclick="spotResult(${p.id},1)">在</button><button type="button" class="danger" ${ph==='closed'?'disabled':''} onclick="spotResult(${p.id},0)">不在</button></span>`}</div>`).join('');
+    if(picksHtml!==picksLast){picksLast=picksHtml;document.getElementById('picks').innerHTML=picksHtml}
+  }else{document.getElementById('spotClosedHint').style.display='none'}
   renderFunnel();
   renderMcands();
+  renderMFails();
 }
 function renderFunnel(){
   const fEl=document.getElementById('funnel'), sEl=document.getElementById('stuck');
   const fn=state.funnel;
   if(!fn){fEl.innerHTML='';sEl.style.display='none';return}
   const t=fn.total;
-  const badLine=(t.land_expired+t.reject)>t.checkin_ok;
+  // 伺服器錯誤（checkin_error，例如 database is locked）也算紅字理由——那是伺服器的問題，
+  // 不是學生沒動作，跟被拒／過期太多一樣值得老師注意。
+  const badLine=(t.land_expired+t.reject)>t.checkin_ok||t.server_error>0;
   const reasonTxt=Object.entries(t.reject_by_reason||{}).sort((a,b)=>b[1]-a[1]).map(([k,v])=>`${RL[k]||k} ${v}`).join('、');
-  fEl.innerHTML=`<span class="k${badLine?' err':''}">掃到 ${t.land_ok}　過期 ${t.land_expired}　成功 ${t.checkin_ok}　被拒 ${t.reject}${reasonTxt?`（${reasonTxt}）`:''}${t.silent?`　落地未送出 ${t.silent}`:''}${t.client_errors?`　前端錯誤 ${t.client_errors}`:''}</span>`;
+  fEl.innerHTML=`<span class="k${badLine?' err':''}">掃到 ${t.land_ok}　過期 ${t.land_expired}　成功 ${t.checkin_ok}　被拒 ${t.reject}${reasonTxt?`（${reasonTxt}）`:''}${t.server_error?`　伺服器錯誤 ${t.server_error}`:''}${t.silent?`　落地未送出 ${t.silent}`:''}${t.net_fail?`　送出失敗（網路）${t.net_fail}`:''}${t.code_bad?`　輸錯碼 ${t.code_bad}`:''}${t.client_errors?`　前端錯誤 ${t.client_errors}`:''}</span>`;
   const stuck=state.stuck||[];
-  if(stuck.length){
+  // info 為真的（已有紀錄、又用新瀏覽器掃了一次，多半是本人）另起一行用灰字，不跟「卡住需要幫忙」混在一起
+  const helpList=stuck.filter(x=>!x.info), infoList=stuck.filter(x=>x.info);
+  if(helpList.length||infoList.length){
     sEl.style.display='';
-    sEl.innerHTML=`<p class="muted sm" style="margin:10px 0 4px">卡住需要幫忙：</p>`+stuck.map(x=>
-      `<span class="tag flag">${esc(x.student_id)} ${esc(dispName(x.name))}（${esc(x.reason_label)}）</span>`).join(' ');
+    sEl.innerHTML=(helpList.length?`<p class="muted sm" style="margin:10px 0 4px">卡住需要幫忙：</p>`+helpList.map(x=>
+      state.kind==='bind'?`<span class="tag flag${x.conflict?' err':''}">${esc(x.student_id)} ${esc(dispName(x.name))}（${esc(x.reason_label)}）</span> ${resetBtn(x)}`
+      // 卡住的人可以點——學號填進手動簽到的輸入框、捲過去、焦點進輸入框，但不自動送出
+      :`<span class="tag flag stuckpick${x.conflict?' err':''}" role="button" tabindex="0" data-sid="${esc(x.student_id)}" style="cursor:pointer" onclick="pickStuck(this.dataset.sid)" onkeydown="if(event.key==='Enter'||event.key===' '){event.preventDefault();pickStuck(this.dataset.sid)}">${esc(x.student_id)} ${esc(dispName(x.name))}（${esc(x.reason_label)}）</span> ${resetBtn(x)}`).join(' '):'')
+      +(infoList.length?`<p class="muted sm" style="margin:10px 0 4px">多半是本人，不用處理：</p>`+infoList.map(x=>
+      `<span class="tag">${esc(x.student_id)} ${esc(dispName(x.name))}（${esc(x.reason_label)}）</span>`).join(' '):'');
   }else{sEl.style.display='none';sEl.innerHTML=''}
 }
-async function setStatus(pk,status){if(!status)return;document.activeElement&&document.activeElement.blur();await post('/api/t/session/'+sid+'/status',{pk,status});load(true)}
-async function extend(){await guard(document.getElementById('extendBtn'),async()=>{await post('/api/t/session/'+sid+'/extend',{minutes:2});await load(true)})}
-async function spot(){await guard(document.getElementById('spotBtn'),async()=>{const j=await post('/api/t/session/'+sid+'/spotcheck',{});if(j.ok===false)return;if(j.note){alert(j.note);return}await load(true);document.getElementById('spot').scrollIntoView({behavior:'smooth'})})}
-async function spotResult(id,p){await post('/api/t/spotcheck/'+id,{present:p});load(true)}
+async function setStatus(pk,status){if(!status)return;document.activeElement&&document.activeElement.blur();const j=await post('/api/t/session/'+sid+'/status',{pk,status});
+  // 老師用名單下拉改狀態成功時，不管失敗清單裡那筆當初想改成什麼，都算數清掉——
+  // 老師已經用另一個方式把狀態定案了，繼續留著舊的失敗訊息只會誤導。
+  if(j&&j.ok){delete mFails[pk];renderMFails()}
+  load(true);return j}
+// 遲到區簽到、目前待確認的列，下拉選「出席」要先跟老師確認一次——放行按出席前，老師往往
+// 沒意識到這個人其實是遲到才簽到；選「取消」就改記遲到，伺服器端不改寫老師最後的選擇。
+async function onStatusSelect(pk,status,wasLatePending){
+  if(!status)return;
+  if(status==='present'&&wasLatePending&&!confirm('他是在遲到區簽到的，要記「出席」嗎？按「取消」改記「遲到」。')){
+    await setStatus(pk,'late');return;
+  }
+  const j=await setStatus(pk,status);
+  if(j&&j.chained&&j.chained.length){
+    alert('同一支手機的 '+j.chained.map(x=>x.student_id+' '+x.name).join('、')+' 也因為代簽連坐被記缺席，要一起改回請在名單上改他。');
+  }
+}
+async function extend(){await guard(document.getElementById('extendBtn'),async()=>{
+  const target=document.getElementById('extendBtn').textContent.includes('延長出席窗')?'open':'late';
+  const j=await post('/api/t/session/'+sid+'/extend',{minutes:2,target});
+  if(j.note)alert(j.note);
+  await load(true)
+})}
+async function spot(){await guard(document.getElementById('spotBtn'),async()=>{
+  const j=await post('/api/t/session/'+sid+'/spotcheck',{});
+  // 抽點按兩次就會抽兩批，網路失敗時（post() 已經重新讀取狀態）也捲到抽點名單，跟成功時一樣，
+  // 讓老師先看畫面上實際抽到了誰，不必自己判斷有沒有抽過。
+  if(j.networkError){document.getElementById('spot').scrollIntoView({behavior:'smooth'});return}
+  if(j.ok===false)return;
+  if(j.note){alert(j.note);return}
+  await load(true);document.getElementById('spot').scrollIntoView({behavior:'smooth'})
+})}
+async function spotResult(id,p){
+  // 按「不在」會改缺席（連坐同一支手機）、綁定場次還會撤回綁定且救不回來，先讓老師確認一次
+  if(p===0){
+    const x=(state.spots||[]).find(v=>v.id===id);
+    const head=x?'確定 '+x.student_id+' '+dispName(x.name)+' 不在？':'確定不在？';
+    const tail=state.kind==='bind'
+      ?'\n會撤回這個學號的綁定，今天不能再綁。按錯也救不回來，只能下次上課再綁（首次綁定要開著）。'
+      :'\n這一場會記缺席；用同一支手機簽的其他學號也會一起記缺席（已按「在」的不算）。';
+    if(!confirm(head+tail))return;
+  }
+  await post('/api/t/spotcheck/'+id,{present:p});load(true)}
 async function resetIp(){if(!confirm('把教室 IP 改成現在這台裝置的網路出口？請在投影筆電上按。'))return;const j=await post('/api/t/session/'+sid+'/teacher-ip',{force:'1'});if(j.ok)load(true)}
 async function toggleBind(){await post('/api/t/course/'+state.course_id+'/bind',{allow:state.allow_bind?'0':'1'});load(true)}
-async function notify(){await guard(document.getElementById('notifyBtn'),async()=>{const j=await post('/api/t/session/'+sid+'/notify',{});if(j.ok){alert('已發到 Discord');await load(true)}})}
-async function closeSession(){if(!confirm('結束點名？沒簽的會記缺席。'))return;await guard(document.getElementById('closeBtn'),async()=>{await post('/api/t/session/'+sid+'/close',{});await load(true)})}
-async function delSession(){if(!confirm('整筆刪除這次點名？所有簽到紀錄一起消失，報表不計。'+(state.phase==='closed'&&state.discord?'\n注意：Discord 上已發出的名單不會被撤回。':'')))return;await post('/api/t/session/'+sid+'/delete',{});location.href='/t'}
+async function toggleHold(){await post('/api/t/session/'+sid+'/hold',{hold:state.discord_held_manual?'0':'1'});load(true)}
+async function notify(){await guard(document.getElementById('notifyBtn'),async()=>{
+  // 伺服器端同步等 Discord 可能要跑到 15 秒×多則，前端逾時放寬到 45 秒；逾時或網路失敗
+  // 不再叫「再按一次」（伺服器記著發送狀態，120 秒內重按也不會真的重發），改用自己的訊息，
+  // 不跳 post() 的通用 alert。
+  const j=await post('/api/t/session/'+sid+'/notify',{},{quiet:true,timeoutMs:45000});
+  if(j.networkError){alert('不確定有沒有發出，請先看 Discord 頻道；兩分鐘內重按不會重複發');return}
+  if(j.ok===false){alert(j.error||'發送失敗');return}
+  if(j.again){alert('兩分鐘內已經發過同樣的名單，這次沒有重複發');await load(true);return}
+  alert('已發到 Discord');await load(true);
+})}
+async function closeSession(){
+  // 老師提早按結束時，讓他看到還有幾支手機在填表、出席窗還沒到（state 是最近一次輪詢的結果，沒有就當 0）
+  let m='結束點名？沒簽的會記缺席。';
+  if(state.kind==='bind')m='結束這一場綁定？（綁定場次不記缺席）';  // 綁定場次不寫缺席列
+  if((state.filling||0)>0)m+='\n現在還有 '+state.filling+' 支手機在填表（三分鐘內掃到、還沒簽到成功），現在結束他們會記缺席。';
+  if(state.phase==='open')m+='\n出席窗還要 '+Math.max(1,Math.ceil((state.open_until-state.now)/60))+' 分鐘才關。';
+  if(!confirm(m))return;await guard(document.getElementById('closeBtn'),async()=>{await post('/api/t/session/'+sid+'/close',{});await load(true)})}
+let reopening=false;
+async function reopenSession(){
+  if(reopening)return;
+  if(!confirm('取消結束？\n結束時自動記的缺席會拿掉，出席窗與遲到窗都至少再開 2 分鐘，學生可以繼續掃碼簽到；已經簽到的、你改過的都不變。'))return;
+  reopening=true;
+  try{
+    const j=await post('/api/t/session/'+sid+'/reopen',{});
+    if(j.ok)alert(j.discord_sent
+      ?'已取消結束，出席窗與遲到窗都至少再開 2 分鐘。剛才送出被擋的同學，請他們重新掃 QR。\n剛才發到 Discord 的名單撤不回；之後再按結束，會再發一份新的。'
+      :'已取消結束，出席窗與遲到窗都至少再開 2 分鐘。剛才送出被擋的同學，請他們重新掃 QR。');
+    await load(true);
+  }finally{reopening=false}
+}
+async function delSession(){
+  if(!confirm('整筆刪除這次點名？所有簽到紀錄一起消失，報表不計。'+(state.phase==='closed'&&state.discord?'\n注意：Discord 上已發出的名單不會被撤回。':'')))return;
+  // 只有伺服器真的回成功才跳回主頁；失敗（網路問題或伺服器拒絕）留在原頁，原因已由 post() 顯示。
+  const j=await post('/api/t/session/'+sid+'/delete',{});
+  if(j.ok)location.href='/t';
+}
 async function toggleVoid(){
   const next=state.voided?'0':'1';
   const msg=state.voided?'取消作廢，這次點名重新計入出缺勤？':'本場作廢：不計入出缺勤，紀錄仍保留可查；已經發出的 Discord 名單不會被撤回。確定作廢？';
@@ -165,20 +378,95 @@ async function bulkStatus(){
   const j=await post('/api/t/session/'+sid+'/bulk-status',{to});
   if(j.ok)load(true);
 }
+// 全形英數轉半形，跟學生端同一套規則（學號欄 toHalfwidth）
+function toHalfwidth(x){return x.replace(/[！-～]/g,c=>String.fromCharCode(c.charCodeAt(0)-0xFEE0)).replace(/　/g,' ')}
 function mCandidates(){
-  const q=document.getElementById('mid').value.trim();
+  const q=toHalfwidth(document.getElementById('mid').value).trim();
   if(!q)return[];
   const qUp=q.toUpperCase();
   return state.rows.filter(r=>r.student_id===qUp||(qUp.length>=3&&r.student_id.endsWith(qUp))||r.name.includes(q)).slice(0,8);
 }
-async function mSet(pk,status){await post('/api/t/session/'+sid+'/status',{pk,status});document.getElementById('mid').value='';document.getElementById('mid').blur();load(true)}
+// 候選列要看得到這個人現在的狀態與來源
+function curState(r){
+  if(!r.status)return '未簽到';
+  if(r.source==='auto'&&r.status==='absent')return '缺席（自動）';
+  return (SL[r.status]||r.status)+(r.source==='qr'?'（掃碼）':r.source==='manual'?'（老師手動）':'');
+}
+// 卡住名單旁的「重設 PIN」——忘了 PIN 又換了瀏覽器的人，老師當場重設，他重掃 QR 照畫面設一組新的。
+// 綁定場次沒有手動簽到區，回饋行改寫在名單下方的 #stuckdone。
+function resetBtn(x){return `<button type="button" class="ghost mini" data-pk="${esc(x.pk)}" data-sid="${esc(x.student_id)}" data-name="${esc(x.name)}" onclick="resetPin(this)">重設 PIN</button>`}
+async function resetPin(btn){
+  if(btn.disabled)return;
+  const who=btn.dataset.sid+' '+dispName(btn.dataset.name);
+  if(!confirm('重設 '+who+' 的 PIN？他要重新掃 QR，照畫面設一組新的。'))return;
+  btn.disabled=true;
+  let j;
+  try{j=await post('/api/t/student/'+btn.dataset.pk+'/unbind',{reset_pin:'1'})}finally{btn.disabled=false}
+  if(j&&j.ok){
+    const text='已重設 '+who+'，請他重新掃 QR';
+    if(state.kind==='bind'){
+      const el=document.getElementById('stuckdone');el.textContent=text;
+      if(mDoneTimer)clearTimeout(mDoneTimer);
+      mDoneTimer=setTimeout(()=>{el.textContent=''},8000);
+    }else showMDone(text);
+    load(true);
+  }
+}
+// 點卡住名單的人——填學號、更新候選、捲到手動簽到區、焦點進 #mid；不送出
+function pickStuck(stuId){
+  const midEl=document.getElementById('mid');
+  midEl.value=stuId;
+  midEl.dispatchEvent(new Event('input',{bubbles:true}));
+  document.getElementById('manualSection').scrollIntoView({block:'start'});
+  midEl.focus({preventScroll:true});
+}
+let mFails={}; // pk -> {student_id,name,error,status}，送出失敗的手動簽到暫存在這裡，不用 alert
+let mSending=new Set(), mDoneTimer=null;  // 送出中的 pk（兩個鈕 disabled、擋連按）
+function showMDone(text){
+  const el=document.getElementById('mdone');
+  el.textContent=text;
+  if(mDoneTimer)clearTimeout(mDoneTimer);
+  mDoneTimer=setTimeout(()=>{el.textContent=''},8000);  // 提示留約 8 秒
+}
+async function mSet(pk,status){
+  if(mSending.has(pk))return;  // 同一個人送出中，再按一次不重送
+  const stuRow=state.rows.find(r=>r.pk===pk);
+  // 這個人現在已經是出席或遲到（任何來源），老師按的是另一個狀態：先確認，取消就不送（改成較低的狀態不問，是 H-DC-05）
+  if(stuRow&&(stuRow.status==='present'||stuRow.status==='late')&&stuRow.status!==status
+     &&!confirm(dispName(stuRow.name)+' 目前是'+curState(stuRow)+'，確定改成'+SL[status]+'？'))return;
+  const midEl=document.getElementById('mid'), midAtSend=midEl.value;  // 記下送出當下的內容
+  mSending.add(pk);renderMcands();
+  let j;
+  try{j=await post('/api/t/session/'+sid+'/status',{pk,status},{quiet:true})}
+  finally{mSending.delete(pk);renderMcands()}
+  if(j&&j.ok){
+    delete mFails[pk];
+    if(stuRow)showMDone(j.unchanged?`${stuRow.student_id} ${dispName(stuRow.name)} 已經是${SL[status]}，沒有變更`:`已記：${stuRow.student_id} ${dispName(stuRow.name)} → ${SL[status]}`);
+    // 只有 #mid 內容還等於送出當下的內容才清空候選人區與輸入框；焦點不移動（不 blur、
+    // 不 focus 別處）——老師這段時間可能已經在打下一位的學號，清掉或搶走焦點會打斷他。
+    if(midEl.value===midAtSend){midEl.value=''}
+  }else if(stuRow){
+    // 伺服器有回明確的拒絕（j.error）就講原因，不說「沒有送到」；網路失敗才叫老師再按一次
+    mFails[pk]={student_id:stuRow.student_id,name:stuRow.name,error:(j&&j.error)||'',status};
+    // 失敗：不動老師正在輸入的內容（不清空、不用剛才那筆的值覆寫）
+  }
+  renderMFails();
+  load(true);
+}
+function renderMFails(){
+  const el=document.getElementById('mfails');
+  // 姓名照「遮蔽姓名」開關顯示（點名頁可能正投在教室螢幕上）
+  el.innerHTML=Object.values(mFails).map(f=>`<p class="err" style="margin:4px 0">【${esc(f.student_id)} ${esc(dispName(f.name))}】${f.error?'沒有改成：'+esc(f.error):'沒有送到，請再按一次'}</p>`).join('');
+}
 function renderMcands(){
   const el=document.getElementById('mcands');
   const cands=mCandidates();
-  el.innerHTML=cands.map(r=>`<div class="row" style="padding:4px 0">
-   <span class="mono">${esc(r.student_id)}</span><span>${esc(dispName(r.name))}</span>
-   <button type="button" onclick="mSet(${r.pk},'present')">出席</button>
-   <button type="button" class="ghost" onclick="mSet(${r.pk},'late')">遲到</button></div>`).join('');
+  // 每位候選固定兩行（學號姓名、目前狀態＋按鈕），狀態文字不換行，別的學生簽到時這一塊的高度不會變
+  const html=cands.map(r=>{const dis=mSending.has(r.pk)?' disabled':'';return `<div class="mcand" style="padding:4px 0">
+   <div class="row" style="flex-wrap:nowrap"><span class="mono">${esc(r.student_id)}</span><span>${esc(dispName(r.name))}</span><span class="k mstate" style="white-space:nowrap;flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis">目前：${esc(curState(r))}</span></div>
+   <div class="row"><button type="button"${dis} onclick="mSet(${r.pk},'present')">出席</button>
+   <button type="button" class="ghost"${dis} onclick="mSet(${r.pk},'late')">遲到</button></div></div>`}).join('');
+  if(html!==mcandsLast){mcandsLast=html;el.innerHTML=html}  // 同 #picks，沒變就不重寫，免得吃掉按住中的點擊
 }
 document.getElementById('mid').addEventListener('input',renderMcands);
 document.getElementById('mid').addEventListener('keydown',e=>{

@@ -20,7 +20,7 @@
 <input inputmode="numeric" pattern="[0-9]*" maxlength="1" name="c6" aria-label="第 6 位">
 </div>
 {% if error %}<p class="err">{{ error }}</p>{% endif %}
-<p style="margin-top:24px"><button class="big" type="submit" id="go">下一步</button></p>
+<p style="margin-top:24px"><button class="big" type="submit" id="go" disabled>頁面還沒載完，請重新整理這一頁</button></p>
 </form>
 <p class="muted sm">數字會定時更換，換了以後半分鐘內舊的還能用，不用搶；六位填滿會自動送出。</p>
 <p class="muted sm">手機掃不過，不要借同學的手機，直接舉手找老師。</p>
@@ -37,6 +37,8 @@ cells.forEach((c,i)=>{
   c.addEventListener('paste',e=>{e.preventDefault();fillFrom(i,(e.clipboardData||window.clipboardData).getData('text'))});
   c.addEventListener('focus',()=>c.select());
 });
+// 頁尾腳本設好事件之後才啟用送出鈕、換回原本文字
+document.getElementById('go').disabled=false;document.getElementById('go').textContent='下一步';
 form.addEventListener('submit',e=>{sync();if(hidden.value.length<6){e.preventDefault();sent=false;cells[Math.max(0,cells.findIndex(c=>!c.value))].focus()}});
 window.addEventListener('pageshow',()=>{sent=false;cells.forEach(c=>c.value='');hidden.value='';cells[0].focus()});
 </script>

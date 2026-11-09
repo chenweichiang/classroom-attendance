@@ -3,6 +3,7 @@
 <div class="mast"><span class="k"><b>課堂點名</b> · {{ BASE_HOST }}</span></div>
 <div style="max-width:380px;margin:8vh auto 0">
 <h1>老師登入</h1>
+{% if redo %}<p class="err">登入已經失效，剛才按的操作沒有送出。登入後會回到原本的頁面，請再按一次。</p>{% endif %}
 <form method="post" action="/t/login">
 <input type="hidden" name="next" value="{{ next }}">
 <label>密碼</label><input type="password" name="password" autofocus autocomplete="current-password">

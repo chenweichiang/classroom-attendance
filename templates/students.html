@@ -1,5 +1,14 @@
 {% extends "base.html" %}{% block title %}{{ c.name }}｜名冊{% endblock %}
-{% block head %}<style>.set{display:grid;grid-template-columns:repeat(auto-fit,minmax(130px,1fr));gap:4px 18px;align-items:end}.set label{margin-top:6px}</style>{% endblock %}
+{% block head %}<style>.set{display:grid;grid-template-columns:repeat(auto-fit,minmax(130px,1fr));gap:4px 18px;align-items:end}.set label{margin-top:6px}
+/* 手機窄螢幕（390 寬）時每列改成卡片，「已綁 日期 時間」可折行，兩顆按鈕完整在視窗內 */
+#roster .tag{white-space:normal}
+@media (max-width:600px){
+#roster table,#roster tbody{display:block;width:100%}
+#roster tr.hd{display:none}
+#roster tr{display:flex;flex-wrap:wrap;align-items:center;gap:4px 10px;padding:8px 0;border-bottom:1px solid var(--rule-soft)}
+#roster td{display:block;padding:0;border:0;min-width:0}
+#roster td.act{flex-basis:100%}
+}</style>{% endblock %}
 {% block body %}
 <div class="mast"><span class="k"><a href="/t" style="text-decoration:none"><b>課堂點名</b></a> · {{ c.name }}</span><nav><a href="/t/course/{{ c.id }}/report">學期報表</a><a href="/t">主頁</a></nav></div>
 <h1>{{ c.name }}</h1>
@@ -7,8 +16,8 @@
 <form method="post" action="/t/course/{{ c.id }}/settings">
 <div class="set">
 <div><label>開放簽到，分鐘</label><input name="open_minutes" type="number" required min="1" max="600" value="{{ st.open_minutes }}" class="mono"></div>
-<div><label>遲到上限，分鐘</label><input name="late_minutes" type="number" required min="1" max="600" value="{{ st.late_minutes }}" class="mono"></div>
-<div><label>QR 輪換，秒</label><input name="qr_interval" type="number" required min="5" max="600" value="{{ st.qr_interval }}" class="mono"></div>
+<div><label>遲到上限，分鐘</label><input name="late_minutes" type="number" required min="1" max="600" value="{{ st.late_minutes }}" class="mono"><small class="muted sm">要比開放分鐘多幾分鐘；兩個一樣的話，最後一刻掃到、送出時剛好結束的人沒有遲到區可掉，會直接記缺席。</small></div>
+<div><label>QR 輪換，秒</label><input name="qr_interval" type="number" required min="5" max="600" value="{{ st.qr_interval }}" class="mono"><small class="muted sm">點名進行中不要改：已經顯示的碼會立刻失效。</small></div>
 <div><label>過期容許，秒</label><input name="qr_grace" type="number" required min="0" max="120" value="{{ st.qr_grace }}" class="mono"></div>
 <div><label>抽點人數</label><input name="spot_n" type="number" required min="1" max="200" value="{{ st.spot_n }}" class="mono"></div>
 <div><label>綁定場次開放分鐘</label><input name="bind_minutes" type="number" required min="3" max="30" value="{{ st.bind_minutes }}" class="mono"></div>
@@ -16,18 +25,38 @@
 <div style="grid-column:1/-1"><label>Discord 頻道 ID（17 到 20 位數字），結束點名時把統計與缺席、遲到、待確認名單發過去；留空不發</label><input name="discord_channel" value="{{ st.discord_channel }}" class="mono" placeholder="例如 123456789012345678"></div>
 </div>
 <p style="margin:14px 0 0"><strong>首次綁定</strong>：目前<span id="bindState">{{ '開放' if st.allow_bind else '已關閉' }}</span>　<button type="button" class="ghost mini" onclick="toggleBind({{ 'false' if st.allow_bind else 'true' }})">{{ '關閉' if st.allow_bind else '開放' }}</button></p>
-<p class="muted sm" style="margin:6px 0 0">第一週全班綁定完後關掉，之後沒人能用別人的學號綁走手機；新同學、換手機的人、待確認被放行的人要簽時，在點名頁或這裡臨時打開，簽完再關。這個開關即時生效，不需要按儲存。上面的分鐘數只影響之後開的點名，進行中的那場請用「延長」。</p>
+<p class="muted sm" style="margin:6px 0 0">第一週全班綁定完後關掉，之後沒人能用別人的學號綁走手機；新同學、待確認被放行的人要簽時，在點名頁或這裡臨時打開，簽完再關。這個開關即時生效，不需要按儲存。上面的分鐘數只影響之後開的點名，進行中的那場請用「延長」。</p>
 <p style="margin-top:18px"><button type="submit" class="ghost">儲存設定</button></p>
 </form>
 <h2>名冊<small>{{ rows|length }} 人</small></h2>
-<p class="muted sm">「解除綁定」讓學生換手機重綁，PIN 不變；「重設」連 PIN 一起清掉，下次簽到當作第一次。</p>
-<div class="tablewrap"><table><tr><th>學號</th><th>姓名</th><th>班級</th><th>綁定</th><th></th></tr>
-{% for r in rows %}<tr><td class="mono">{{ r.student_id }}</td><td style="white-space:nowrap">{{ r.name }}</td><td class="muted">{{ r.cls }}</td>
+<p class="muted sm">學生換手機或瀏覽器時，在新的那邊輸入原本的 PIN 就會自動改綁，不用到這裡處理。「解除綁定」只清裝置、PIN 不變；「重設」連 PIN 一起清掉並解除本場的 PIN 鎖定，學生下次簽到當作第一次。</p>
+<div class="row"><input id="rq" type="search" placeholder="搜尋學號或姓名" aria-label="搜尋學號或姓名" autocomplete="off" style="width:auto;min-width:220px"></div>
+<div class="tablewrap" id="roster"><table><tr class="hd"><th>學號</th><th>姓名</th><th>班級</th><th>綁定</th><th></th></tr>
+{% for r in rows %}<tr data-q="{{ r.student_id|upper }} {{ r.name }}"><td class="mono">{{ r.student_id }}</td><td style="white-space:nowrap">{{ r.name }}</td><td class="muted">{{ r.cls }}</td>
 <td>{% if r.device_hash %}<span class="tag s-present">已綁 <span class="mono">{{ r.bound_at|fmt(true) }}</span></span>{% elif r.pin_hash %}<span class="tag s-late">有 PIN 未綁</span>{% else %}<span class="tag s-absent">未使用</span>{% endif %}</td>
-<td><button type="button" class="ghost mini" onclick="unbind({{ r.id }},'')">解除綁定</button> <button type="button" class="ghost mini" onclick="unbind({{ r.id }},'1')">重設</button></td></tr>{% endfor %}
+<td class="act"><button type="button" class="ghost mini" data-sid="{{ r.student_id }}" data-name="{{ r.name }}" onclick="unbind({{ r.id }},'',this)">解除綁定</button> <button type="button" class="ghost mini" data-sid="{{ r.student_id }}" data-name="{{ r.name }}" onclick="unbind({{ r.id }},'1',this)">重設</button></td></tr>{% endfor %}
 </table></div>
 <script>
-async function toggleBind(allow){const fd=new FormData();fd.append('allow',allow?'1':'0');await fetch('/api/t/course/{{ c.id }}/bind',{method:'POST',body:fd});location.reload()}
-async function unbind(pk,reset){if(!confirm(reset?'清掉裝置與 PIN？':'解除裝置綁定？'))return;const fd=new FormData();fd.append('reset_pin',reset);await fetch('/api/t/student/'+pk+'/unbind',{method:'POST',body:fd});location.reload()}
+// 學號或姓名搜尋（前端篩選，子字串、不分大小寫）
+document.getElementById('rq').addEventListener('input',e=>{
+  const q=e.target.value.trim().toUpperCase();
+  document.querySelectorAll('#roster tr[data-q]').forEach(tr=>{tr.style.display=(!q||tr.dataset.q.toUpperCase().includes(q))?'':'none'});
+});
+const NETERR='連線中斷，沒有成功，請再試一次';
+async function post(url,fd){try{const r=await fetch(url,{method:'POST',body:fd});if(!r.ok){let j={};try{j=await r.json()}catch(e){}alert(j.error||'沒有成功（HTTP '+r.status+'），請重新整理後再試；登入逾時請重新登入');return false}let j={};try{j=await r.json()}catch(e){/* 回應不是 JSON 也算成功，旗標當沒有 */}return j}catch(e){alert(NETERR);return false}}
+async function toggleBind(allow){const fd=new FormData();fd.append('allow',allow?'1':'0');if(await post('/api/t/course/{{ c.id }}/bind',fd))location.reload()}
+async function unbind(pk,reset,btn){
+  // 確認框要講是誰（學號姓名來自按鈕的 data 屬性，Jinja 自動跳脫）
+  const who=btn.dataset.sid+' '+btn.dataset.name;
+  if(!confirm(reset?'重設 '+who+'？\n會清掉他綁定的手機和 PIN，他要重新設 PIN 才能簽到。':'解除 '+who+' 的手機綁定？\nPIN 會留著，他用新手機輸入原本的 PIN 就能綁。'))return;
+  const fd=new FormData();fd.append('reset_pin',reset);
+  const j=await post('/api/t/student/'+pk+'/unbind',fd);
+  if(!j)return;
+  // 提示依伺服器回的旗標選一句，不再一律說「今天可以直接重綁」
+  alert(j.revoked_today?'已解除。這個學號今天被抽點判不在，今天不能再綁；人在教室的話，今天的出缺勤請在點名頁改，下次上課再綁（首次綁定要開著）。'
+    :j.reset?'已重設。他今天重新掃 QR、設新的 PIN 就能綁（不受首次綁定開關限制）；過了今天，首次綁定要開著才能綁。'
+    :'已解除。他之後掃 QR、輸入原本的 PIN 就會綁到那支手機（不受首次綁定開關限制）。忘了 PIN 的話請改按「重設」；他這堂課已經 PIN 錯太多次被鎖的話，請在點名頁用「手動簽到」補登。');
+  location.reload();
+}
 </script>
 {% endblock %}
