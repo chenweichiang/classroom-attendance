@@ -22,7 +22,7 @@ concurrency:
 jobs:
   gate-quick:
     runs-on: ubuntu-24.04
-    timeout-minutes: 30
+    timeout-minutes: 45  # 九層在 GitHub 執行機上約 23–30 分鐘，執行機快慢可差近一倍
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with:
